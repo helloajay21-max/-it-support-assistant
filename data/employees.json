@@ -1,0 +1,102 @@
+[
+  {
+    "employee_id": "EMP1001",
+    "name": "Alice Johnson",
+    "email": "alice.johnson@techcorp.com",
+    "department": "Engineering",
+    "role": "Software Engineer",
+    "location": "New York",
+    "manager": "Bob Williams",
+    "phone": "+1-212-555-0101"
+  },
+  {
+    "employee_id": "EMP1002",
+    "name": "Bob Williams",
+    "email": "bob.williams@techcorp.com",
+    "department": "Engineering",
+    "role": "Engineering Manager",
+    "location": "New York",
+    "manager": "Carol Davis",
+    "phone": "+1-212-555-0102"
+  },
+  {
+    "employee_id": "EMP1003",
+    "name": "Carol Davis",
+    "email": "carol.davis@techcorp.com",
+    "department": "IT",
+    "role": "IT Director",
+    "location": "Chicago",
+    "manager": "N/A",
+    "phone": "+1-312-555-0103"
+  },
+  {
+    "employee_id": "EMP1004",
+    "name": "David Lee",
+    "email": "david.lee@techcorp.com",
+    "department": "Finance",
+    "role": "Financial Analyst",
+    "location": "Chicago",
+    "manager": "Eva Chen",
+    "phone": "+1-312-555-0104"
+  },
+  {
+    "employee_id": "EMP1005",
+    "name": "Eva Chen",
+    "email": "eva.chen@techcorp.com",
+    "department": "Finance",
+    "role": "Finance Manager",
+    "location": "Chicago",
+    "manager": "Carol Davis",
+    "phone": "+1-312-555-0105"
+  },
+  {
+    "employee_id": "EMP1006",
+    "name": "Frank Martinez",
+    "email": "frank.martinez@techcorp.com",
+    "department": "HR",
+    "role": "HR Specialist",
+    "location": "San Francisco",
+    "manager": "Grace Kim",
+    "phone": "+1-415-555-0106"
+  },
+  {
+    "employee_id": "EMP1007",
+    "name": "Grace Kim",
+    "email": "grace.kim@techcorp.com",
+    "department": "HR",
+    "role": "HR Manager",
+    "location": "San Francisco",
+    "manager": "Carol Davis",
+    "phone": "+1-415-555-0107"
+  },
+  {
+    "employee_id": "EMP1008",
+    "name": "Henry Brown",
+    "email": "henry.brown@techcorp.com",
+    "department": "Sales",
+    "role": "Sales Executive",
+    "location": "Dallas",
+    "manager": "Irene White",
+    "phone": "+1-214-555-0108"
+  },
+  {
+    "employee_id": "EMP1009",
+    "name": "Irene White",
+    "email": "irene.white@techcorp.com",
+    "department": "Sales",
+    "role": "Sales Manager",
+    "location": "Dallas",
+    "manager": "Carol Davis",
+    "phone": "+1-214-555-0109"
+  },
+  {
+    "employee_id": "EMP1024",
+    "name": "James Rodriguez",
+    "email": "james.rodriguez@techcorp.com",
+    "department": "Engineering",
+    "role": "DevOps Engineer",
+    "location": "Seattle",
+    "manager": "Bob Williams",
+    "phone": "+1-206-555-0124"
+  }
+]

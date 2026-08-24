@@ -1,0 +1,86 @@
+[
+  {
+    "article_id": "KB001",
+    "category": "VPN",
+    "title": "How to Reset VPN Password",
+    "keywords": ["vpn", "password", "reset", "cisco", "anyconnect"],
+    "content": "To reset your VPN password:\n1. Visit the self-service portal at https://selfservice.techcorp.com\n2. Click on 'Forgot Password' or 'Reset VPN Credentials'\n3. Enter your employee email address and employee ID\n4. Check your registered email for a password reset link (valid for 30 minutes)\n5. Follow the link and set a new password (min 12 characters, must include uppercase, lowercase, number, and special character)\n6. Reconnect to VPN using Cisco AnyConnect with your new credentials\nIf you do not receive the reset email within 5 minutes, check your spam folder or contact the IT helpdesk."
+  },
+  {
+    "article_id": "KB002",
+    "category": "VPN",
+    "title": "VPN Connection Troubleshooting",
+    "keywords": ["vpn", "not working", "connection", "failed", "cisco", "anyconnect", "troubleshoot"],
+    "content": "Common VPN troubleshooting steps:\n1. Ensure you have a stable internet connection\n2. Restart the Cisco AnyConnect client\n3. Check if VPN server address is: vpn.techcorp.com\n4. Ensure your VPN credentials are not expired (passwords expire every 90 days)\n5. Temporarily disable firewall/antivirus and retry\n6. Clear the AnyConnect cache: Go to Preferences > Clear Cache\n7. Reinstall Cisco AnyConnect if the above steps fail\n8. Check system status at status.techcorp.com for known outages\nIf problem persists, raise a support ticket with your error message and employee ID."
+  },
+  {
+    "article_id": "KB003",
+    "category": "Laptop",
+    "title": "Laptop Not Turning On - Troubleshooting Guide",
+    "keywords": ["laptop", "not turning on", "won't start", "power", "black screen"],
+    "content": "If your laptop won't turn on:\n1. Ensure the laptop is charged - connect to power adapter for 15 minutes\n2. Check if the power LED indicator is lit\n3. Perform a hard reset: Hold the power button for 15 seconds, release, then press again\n4. Check for physical damage or liquid spills\n5. If using a docking station, try without it\n6. Remove and re-seat the battery (if removable)\n7. Try connecting to external monitor to test display\nIf none of these steps work, your laptop may need hardware inspection. Please raise a support ticket for hardware assessment."
+  },
+  {
+    "article_id": "KB004",
+    "category": "Password",
+    "title": "Windows Password Reset Procedure",
+    "keywords": ["windows", "password", "reset", "locked out", "active directory"],
+    "content": "To reset your Windows/Active Directory password:\nOption 1 - Self Service Portal (Recommended):\n1. Go to https://selfservice.techcorp.com from any device\n2. Click 'Reset Windows Password'\n3. Verify identity using your employee ID and registered mobile\n4. Set a new password\n\nOption 2 - IT Helpdesk:\n1. Call IT Helpdesk at ext. 4357 (HELP)\n2. Provide your employee ID and answer security questions\n3. Temporary password will be issued\n4. You must change this password on first login\n\nPassword Requirements: Minimum 12 characters, uppercase + lowercase + number + special character, cannot reuse last 12 passwords."
+  },
+  {
+    "article_id": "KB005",
+    "category": "Email",
+    "title": "Setting Up Email on Mobile Device",
+    "keywords": ["email", "mobile", "outlook", "phone", "ios", "android", "setup"],
+    "content": "To set up corporate email on your mobile device:\nFor iOS (iPhone/iPad):\n1. Download Microsoft Outlook from App Store\n2. Open Outlook and tap Add Account\n3. Enter your corporate email: firstname.lastname@techcorp.com\n4. Enter your Windows/AD password\n5. Accept the MDM enrollment if prompted\n\nFor Android:\n1. Download Microsoft Outlook from Play Store\n2. Follow the same steps as iOS\n3. Accept device management policy when prompted\n\nNote: Corporate email setup requires MDM enrollment for security compliance. Contact IT if you receive enrollment errors."
+  },
+  {
+    "article_id": "KB006",
+    "category": "Software",
+    "title": "Requesting New Software Installation",
+    "keywords": ["software", "install", "request", "application", "new software"],
+    "content": "To request software installation:\n1. Raise a software request ticket through IT Support\n2. Include: software name, version, business justification, and urgency\n3. Manager approval is required for all software requests\n4. IT team will assess license availability and security compliance\n5. Approved software is typically deployed within 2-3 business days via SCCM\n6. Emergency installations can be expedited with manager and IT Director approval\n\nNote: Unauthorized software installation is prohibited per IT Security Policy. All software must be approved and deployed by IT."
+  },
+  {
+    "article_id": "KB007",
+    "category": "Network",
+    "title": "Connecting to Office Wi-Fi",
+    "keywords": ["wifi", "wireless", "network", "internet", "office", "connect"],
+    "content": "To connect to office Wi-Fi:\nCorporate Network (SSID: TechCorp-Corporate):\n1. Select TechCorp-Corporate from Wi-Fi list\n2. Enter your Windows username and password\n3. Accept the certificate if prompted\n\nGuest Network (SSID: TechCorp-Guest):\n1. Select TechCorp-Guest\n2. Open browser - you'll be redirected to the captive portal\n3. Enter your employee email to receive a one-day access code\n\nNote: Only use TechCorp-Corporate for accessing company resources. Guest network does not allow access to internal systems."
+  },
+  {
+    "article_id": "KB008",
+    "category": "Hardware",
+    "title": "Requesting New Hardware / Equipment",
+    "keywords": ["hardware", "new laptop", "monitor", "keyboard", "mouse", "equipment", "request"],
+    "content": "To request new hardware:\n1. Submit a hardware request ticket with: item description, business justification, urgency level\n2. Manager approval required for items over $200\n3. Director approval required for items over $1000\n4. Standard hardware requests are fulfilled within 5-7 business days\n5. Emergency hardware (laptop failure) can be fulfilled within 24-48 hours with proper approvals\n\nStandard Issued Equipment:\n- Laptop: Dell Latitude or MacBook Pro (role-dependent)\n- Monitor: 24-inch Dell\n- Accessories: Keyboard, mouse, webcam included"
+  },
+  {
+    "article_id": "KB009",
+    "category": "Printer",
+    "title": "Printer Setup and Troubleshooting",
+    "keywords": ["printer", "print", "not printing", "setup", "scanner", "copier"],
+    "content": "Setting up a printer:\n1. Go to Settings > Printers & Scanners\n2. Click 'Add a printer or scanner'\n3. Select your floor printer from the list (naming convention: FLR{floor}-PRT{number})\n4. Driver installs automatically via Active Directory\n\nPrinter Troubleshooting:\n1. Check if printer is online (green light)\n2. Clear the print queue: Settings > Printers > right-click > See what's printing > Cancel All\n3. Restart the Print Spooler service (IT can assist)\n4. Check paper and toner levels\n5. Restart the printer\n\nFor persistent issues, raise a ticket with printer name and error message."
+  },
+  {
+    "article_id": "KB010",
+    "category": "Account",
+    "title": "New Employee Account Setup Checklist",
+    "keywords": ["new employee", "onboarding", "account setup", "access", "new hire"],
+    "content": "New employee IT onboarding checklist:\n1. Windows/AD Account - Created by IT before day 1\n2. Email Account - Auto-provisioned with AD account\n3. VPN Access - Requires manager approval, setup within day 1\n4. Laptop - Pre-configured and delivered on day 1\n5. Software Access - Based on role, provisioned within day 1-2\n6. Badge Access - Coordinated with facilities team\n\nNew employees should attend IT orientation on their first day.\nFor missing access, contact IT at helpdesk@techcorp.com or ext. 4357."
+  },
+  {
+    "article_id": "KB011",
+    "category": "Security",
+    "title": "Reporting a Security Incident",
+    "keywords": ["security", "incident", "phishing", "malware", "virus", "suspicious", "breach"],
+    "content": "If you suspect a security incident:\nIMMEDIATE ACTIONS:\n1. Do NOT click any suspicious links or attachments\n2. Disconnect from the network if malware is suspected (unplug ethernet, turn off Wi-Fi)\n3. Do NOT attempt to clean the infection yourself\n\nREPORTING:\n1. Call IT Security immediately: ext. 4911 (Security Hotline)\n2. Email: security@techcorp.com\n3. Raise a CRITICAL priority ticket through IT Support\n\nFor phishing emails:\n- Forward the email to phishing@techcorp.com\n- Do not click any links in the email\n- Delete the email after forwarding\n\nAll security incidents are treated with highest priority."
+  },
+  {
+    "article_id": "KB012",
+    "category": "MFA",
+    "title": "Setting Up Multi-Factor Authentication (MFA)",
+    "keywords": ["mfa", "two factor", "2fa", "authenticator", "microsoft authenticator", "security"],
+    "content": "To set up MFA:\n1. Download Microsoft Authenticator on your mobile device\n2. Go to https://aka.ms/mfasetup from your work computer\n3. Sign in with your corporate account\n4. Click 'Add method' and select 'Authenticator app'\n5. Scan the QR code shown on screen with the Microsoft Authenticator app\n6. Enter the 6-digit code to verify setup\n\nAlternative method (Phone call or SMS):\n1. Select 'Phone' as the method\n2. Enter your mobile number\n3. Choose call or text verification\n\nMFA is mandatory for all remote access including VPN, email, and cloud applications."
+  }
+]

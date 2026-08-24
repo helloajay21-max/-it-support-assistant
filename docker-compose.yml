@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  it-support-assistant:
+    build: .
+    container_name: it-support-assistant
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - SQLITE_DB_PATH=/home/data/tickets.db
+      - WEBSITES_PORT=8501
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

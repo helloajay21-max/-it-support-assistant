@@ -1,0 +1,86 @@
+name: Build and Deploy to Azure App Service (Container)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: it-support-assistant
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image to Docker Hub
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG
+          docker build -t $FULL_IMAGE .
+          docker push $FULL_IMAGE
+          echo "FULL_IMAGE=$FULL_IMAGE" >> $GITHUB_ENV
+
+      - name: Configure web app to use new image
+        run: |
+          az webapp config container set \
+            --name ${{ secrets.WEBAPP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --docker-custom-image-name ${{ env.FULL_IMAGE }} \
+            --docker-registry-server-url https://index.docker.io \
+            --docker-registry-server-user ${{ secrets.DOCKERHUB_USERNAME }} \
+            --docker-registry-server-password ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configure app settings (env vars)
+        run: |
+          az webapp config appsettings set \
+            --name ${{ secrets.WEBAPP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --settings \
+              OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+              OPENAI_MODEL="gpt-4o-mini" \
+              WEBSITES_PORT=8501 \
+              SQLITE_DB_PATH=/home/data/tickets.db \
+              LOG_LEVEL=INFO
+
+      - name: Restart web app
+        run: |
+          az webapp restart \
+            --name ${{ secrets.WEBAPP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }}
+
+      - name: Get deployment URL
+        run: |
+          URL=$(az webapp show \
+            --name ${{ secrets.WEBAPP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --query defaultHostName -o tsv)
+          echo ""
+          echo "✅ Deployed to: https://$URL"
+          echo "app_url=https://$URL" >> $GITHUB_STEP_SUMMARY
+
+# ──────────────────────────────────────────────────────
+# Required GitHub SECRETS (Settings → Secrets → Actions):
+#   AZURE_CREDENTIALS   — az ad sp create-for-rbac --sdk-auth JSON
+#   DOCKERHUB_USERNAME  — helloajay21
+#   DOCKERHUB_TOKEN     — Docker Hub access token
+#   WEBAPP_NAME         — it-support-ajay-001
+#   RESOURCE_GROUP      — Ajay-Practice
+#   OPENAI_API_KEY      — sk-... (same key as MCP-Project)
+# ──────────────────────────────────────────────────────
