@@ -64,6 +64,35 @@ st.markdown("""
         margin-bottom: 0.3rem;
     }
 
+    .author-card {
+        background: linear-gradient(135deg, rgba(0,120,212,0.08) 0%, rgba(0,90,158,0.12) 100%);
+        border: 1px solid rgba(0,120,212,0.18);
+        border-radius: 10px;
+        padding: 0.8rem 0.9rem;
+        margin: 0.5rem 0 0.25rem 0;
+        line-height: 1.35;
+    }
+
+    .author-card .label {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #4b5563;
+        margin-bottom: 0.25rem;
+    }
+
+    .author-card .name {
+        font-weight: 700;
+        color: #0f172a;
+        font-size: 0.95rem;
+    }
+
+    .author-card .email {
+        color: #475569;
+        font-size: 0.82rem;
+        word-break: break-word;
+    }
+
     .stChatMessage { border-radius: 10px; }
 
     div[data-testid="stSidebarContent"] {
@@ -192,6 +221,16 @@ def render_sidebar():
     with st.sidebar:
         st.markdown("## 🖥️ IT Support Assistant")
         st.markdown("*Powered by Agentic AI + LangGraph*")
+        st.markdown(
+            """
+            <div class="author-card">
+                <div class="label">Project Author</div>
+                <div class="name">Ajay Kumar</div>
+                <div class="email">helloajay21@gmail.com</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.divider()
 
         # ── API Status ──
