@@ -114,6 +114,7 @@ def init_session_state():
         "turn_count": 0,
         "session_id": str(time.time()),
         "show_db_admin": False,
+        "db_admin_mode": "view",
         "db_admin_message": None,
     }
     for key, value in defaults.items():
@@ -417,11 +418,13 @@ def render_sidebar():
 
         # ── DB Admin ──
         st.markdown("### 🗄️ DB Admin")
-        if st.button("📊 View DB Details", use_container_width=True):
+        if st.button("📊 Show DB Details", use_container_width=True):
             st.session_state.show_db_admin = True
+            st.session_state.db_admin_mode = "view"
             st.rerun()
-        if st.session_state.get("show_db_admin") and st.button("🙈 Hide DB Details", use_container_width=True):
-            st.session_state.show_db_admin = False
+        if st.button("🗑️ Delete DB Rows", use_container_width=True):
+            st.session_state.show_db_admin = True
+            st.session_state.db_admin_mode = "delete"
             st.rerun()
 
         st.divider()
@@ -461,7 +464,8 @@ def render_db_admin_panel():
         return
 
     st.markdown("### 🗄️ Database Details")
-    st.caption("View all rows in DB and apply actions to selected rows only.")
+    mode = st.session_state.get("db_admin_mode", "view")
+    st.caption("View all rows in DB. Use delete mode to select and remove specific rows.")
 
     employees_count, tickets_count = _db_counts()
     c1, c2 = st.columns(2)
@@ -478,6 +482,10 @@ def render_db_admin_panel():
     rows = _fetch_db_rows(table_name)
     st.caption(f"Rows in `{table_name}`: {len(rows)}")
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    if mode == "view":
+        st.info("Viewing mode active. Click **🗑️ Delete DB Rows** in sidebar to select and delete specific rows.")
+        return
 
     id_field = "employee_id" if table_name == "employees" else "ticket_id"
     selectable_ids = [str(r[id_field]) for r in rows if r.get(id_field)]
