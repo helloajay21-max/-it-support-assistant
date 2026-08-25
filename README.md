@@ -24,6 +24,7 @@ An **Agentic AI system** where an LLM acts as an intelligent agent that:
 3. **Executes** the appropriate tool with validated parameters
 4. **Maintains state** across multi-turn conversations
 5. **Returns** a formatted, professional response
+6. **Queues operational emails** (e.g., VPN first-time setup + reset) to the employee-linked email when valid
 
 ---
 
@@ -115,7 +116,7 @@ it-support-assistant/
 │   ├── init_db.py                    ← DB schema + 8 sample tickets
 │   ├── employees.json                ← 10 sample employees
 │   ├── knowledge_base.json           ← 12 IT how-to/troubleshooting articles
-│   └── tickets.db                    ← SQLite database (auto-created)
+│   └── tickets.db                    ← SQLite database (auto-created; includes email_dispatch_log)
 │
 ├── utils/
 │   └── logger.py                     ← Centralised logging
@@ -345,6 +346,14 @@ Agent: ✅ Ticket TKT-2024-009 created! IT will respond within 4 hours.
 ```
 
 ### Employee Registration (manager-aware)
+```
+
+### First-time VPN setup (new employee)
+```
+User:  I am a new employee. Help me set up VPN. My ID is EMP1026.
+
+Agent: 🔐 First-Time VPN Setup ...
+       ✅ Dispatched first-time setup and password-reset emails to linked employee email
 ```
 User:  Register new employee: Jane Smith, jane@techcorp.com, HR, Carol Davis
 

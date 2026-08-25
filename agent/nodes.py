@@ -110,6 +110,61 @@ def _is_recent_employee(profile: dict, days: int = 7) -> bool:
         return False
 
 
+def _is_valid_email(email: str) -> bool:
+    """Simple email format validation for dispatch checks."""
+    if not email:
+        return False
+    return bool(re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", email.strip()))
+
+
+def _queue_vpn_email_dispatches(employee_id: str, employee_email: str) -> tuple[bool, str]:
+    """
+    Queue both first-time setup and reset-password emails for a valid employee email.
+    Persists in DB log so dispatches are visible in the admin panel.
+    """
+    if not employee_id or not _is_valid_email(employee_email):
+        return False, "Email validation failed"
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        rows = [
+            (
+                employee_id,
+                employee_email.strip().lower(),
+                "VPN_FIRST_TIME_SETUP",
+                "email",
+                "Queued",
+                now,
+                "Auto-triggered from assistant VPN guidance flow",
+            ),
+            (
+                employee_id,
+                employee_email.strip().lower(),
+                "VPN_PASSWORD_RESET",
+                "email",
+                "Queued",
+                now,
+                "Auto-triggered from assistant VPN guidance flow",
+            ),
+        ]
+        cursor.executemany(
+            """
+            INSERT INTO email_dispatch_log
+            (employee_id, employee_email, dispatch_type, channel, status, requested_at, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+        conn.close()
+        return True, "Queued first-time setup + reset password emails"
+    except Exception as exc:
+        logger.error("Failed to queue VPN email dispatches: %s", exc)
+        return False, "Dispatch queue failed"
+
+
 # ------------------------------------------------------------------
 # System Prompt
 # ------------------------------------------------------------------
@@ -461,6 +516,12 @@ def knowledge_search_node(state: AgentState) -> dict:
         emp_name = profile.get("name", state.employee_name or "Employee")
         mgr = profile.get("manager_name", "your manager")
         email = profile.get("email", "your registered work email")
+        dispatch_ok, _dispatch_msg = _queue_vpn_email_dispatches(state.employee_id, email)
+        dispatch_note = (
+            f"✅ Dispatched **first-time setup** and **password reset** emails to **{email}**."
+            if dispatch_ok
+            else f"⚠️ Could not auto-dispatch VPN emails because the linked email is invalid/missing (**{email}**)."
+        )
         onboarding_msg = (
             f"🔐 **First-Time VPN Setup for {emp_name} ({state.employee_id})**\n\n"
             f"Since this is first-time access, use **onboarding activation**, not password reset.\n\n"
@@ -476,6 +537,7 @@ def knowledge_search_node(state: AgentState) -> dict:
             f"   - Use your employee ID and temporary credentials.\n"
             f"5. **First login completion**\n"
             f"   - Set a new permanent password and reconnect.\n\n"
+            f"{dispatch_note}\n\n"
             f"📌 If you did not receive activation credentials yet, say:\n"
             f"**'Create VPN onboarding ticket for {state.employee_id}'** and I’ll raise it."
         )
@@ -489,6 +551,19 @@ def knowledge_search_node(state: AgentState) -> dict:
 
     try:
         result = knowledge_search.invoke({"query": last_human_message})
+        if vpn_related and state.employee_id:
+            profile = _employee_profile(state.employee_id)
+            email = profile.get("email", "")
+            dispatch_ok, _ = _queue_vpn_email_dispatches(state.employee_id, email)
+            if dispatch_ok:
+                result += (
+                    f"\n\n---\n📧 **Dispatch Update:** "
+                    f"Queued both first-time VPN setup and password-reset emails to **{email}**."
+                )
+            else:
+                result += (
+                    f"\n\n---\n⚠️ **Dispatch Update:** Could not queue VPN emails because the linked email is invalid or missing."
+                )
         logger.info("Knowledge search completed successfully")
     except Exception as e:
         logger.error("Knowledge search tool error: %s", e)

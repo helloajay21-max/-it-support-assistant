@@ -131,6 +131,20 @@ def init_db():
         )
     """)
 
+    # ── Email dispatch log table ───────────────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS email_dispatch_log (
+            dispatch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id TEXT NOT NULL,
+            employee_email TEXT NOT NULL,
+            dispatch_type TEXT NOT NULL,   -- VPN_FIRST_TIME_SETUP | VPN_PASSWORD_RESET
+            channel TEXT NOT NULL DEFAULT 'email',
+            status TEXT NOT NULL DEFAULT 'Queued',
+            requested_at TEXT NOT NULL,
+            details TEXT
+        )
+    """)
+
     # Resolve Ajay Kumar's manager name dynamically from JSON data
     _emp1025_manager = "my manager"
     try:

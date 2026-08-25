@@ -148,6 +148,11 @@ def _fetch_db_rows(table_name: str) -> list[dict]:
             FROM tickets
             ORDER BY created_at DESC
         """,
+        "email_dispatch_log": """
+            SELECT dispatch_id, employee_id, employee_email, dispatch_type, channel, status, requested_at, details
+            FROM email_dispatch_log
+            ORDER BY requested_at DESC
+        """,
     }
     if table_name not in queries:
         return []
@@ -159,16 +164,18 @@ def _fetch_db_rows(table_name: str) -> list[dict]:
     return rows
 
 
-def _db_counts() -> tuple[int, int]:
-    """Return (employees_count, tickets_count)."""
+def _db_counts() -> tuple[int, int, int]:
+    """Return (employees_count, tickets_count, email_dispatch_count)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM employees")
     employees_count = int(cursor.fetchone()[0])
     cursor.execute("SELECT COUNT(*) FROM tickets")
     tickets_count = int(cursor.fetchone()[0])
+    cursor.execute("SELECT COUNT(*) FROM email_dispatch_log")
+    email_dispatch_count = int(cursor.fetchone()[0])
     conn.close()
-    return employees_count, tickets_count
+    return employees_count, tickets_count, email_dispatch_count
 
 
 def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_action: str = "") -> tuple[bool, str]:
@@ -186,6 +193,13 @@ def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_acti
             conn.commit()
             conn.close()
             return True, f"Deleted {deleted} ticket row(s)."
+
+        if table_name == "email_dispatch_log":
+            cursor.execute(f"DELETE FROM email_dispatch_log WHERE dispatch_id IN ({placeholders})", tuple(selected_ids))
+            deleted = int(cursor.rowcount)
+            conn.commit()
+            conn.close()
+            return True, f"Deleted {deleted} email dispatch row(s)."
 
         if table_name == "employees":
             if employee_action == "hard_delete":
@@ -469,16 +483,18 @@ def render_db_admin_panel():
     mode = st.session_state.get("db_admin_mode", "view")
     st.caption("View all rows in DB. Use delete mode to select and remove specific rows.")
 
-    employees_count, tickets_count = _db_counts()
-    c1, c2 = st.columns(2)
+    employees_count, tickets_count, email_dispatch_count = _db_counts()
+    c1, c2, c3 = st.columns(3)
     with c1:
         st.metric("Employees", employees_count)
     with c2:
         st.metric("Tickets", tickets_count)
+    with c3:
+        st.metric("Email Dispatches", email_dispatch_count)
 
     table_name = st.selectbox(
         "Select table",
-        ["employees", "tickets"],
+        ["employees", "tickets", "email_dispatch_log"],
         key="db_admin_table",
     )
     rows = _fetch_db_rows(table_name)
@@ -489,7 +505,12 @@ def render_db_admin_panel():
         st.info("Viewing mode active. Click **🗑️ Delete DB Rows** in sidebar to select and delete specific rows.")
         return
 
-    id_field = "employee_id" if table_name == "employees" else "ticket_id"
+    id_field_map = {
+        "employees": "employee_id",
+        "tickets": "ticket_id",
+        "email_dispatch_log": "dispatch_id",
+    }
+    id_field = id_field_map[table_name]
     selectable_ids = [str(r[id_field]) for r in rows if r.get(id_field)]
     selected_ids = st.multiselect(
         f"Select {table_name} rows by `{id_field}`",
