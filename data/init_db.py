@@ -18,6 +18,33 @@ DB_PATH = os.environ.get(
 EMPLOYEES_JSON = os.path.join(os.path.dirname(__file__), "employees.json")
 
 
+def _reconcile_employees_from_tickets(conn):
+    """
+    Ensure every employee_id present in tickets also exists in employees.
+    This protects DB consistency even if older flows created ticket rows first.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO employees
+        (employee_id, name, email, department, role, manager_name, status, created_at)
+        SELECT
+            t.employee_id,
+            COALESCE(NULLIF(MAX(t.employee_name), ''), t.employee_id) AS name,
+            LOWER(t.employee_id) || '@autocreated.local' AS email,
+            'Unknown' AS department,
+            'Employee' AS role,
+            'N/A' AS manager_name,
+            'Active' AS status,
+            datetime('now') AS created_at
+        FROM tickets t
+        LEFT JOIN employees e ON e.employee_id = t.employee_id
+        WHERE e.employee_id IS NULL
+        GROUP BY t.employee_id
+        """
+    )
+
+
 def init_db():
     """Initialize the SQLite database with schema and sample data."""
     # Ensure the parent directory exists (critical for Azure /home/data/ path)
@@ -296,6 +323,9 @@ def init_db():
             ticket.get("resolution_notes")
         ))
 
+    # Keep employees/tickets link integrity in sync
+    _reconcile_employees_from_tickets(conn)
+
     conn.commit()
     conn.close()
     print(f"Database initialized at: {DB_PATH}")
@@ -312,6 +342,9 @@ def get_db_connection():
         os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # Keep integrity in long-running environments before reads/writes.
+    _reconcile_employees_from_tickets(conn)
+    conn.commit()
     return conn
 
 

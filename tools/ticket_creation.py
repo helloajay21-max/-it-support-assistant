@@ -27,7 +27,7 @@ VALID_PRIORITIES = {"Low", "Medium", "High", "Critical"}
 
 
 def _load_employees() -> dict:
-    """Load employees indexed by employee_id from the database."""
+    """Load employees indexed by employee_id from the database (active only)."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -37,7 +37,7 @@ def _load_employees() -> dict:
         return {row["employee_id"]: dict(row) for row in rows}
     except Exception as e:
         logger.error("Failed to load employees from DB: %s", e)
-        return {}
+        raise
 
 
 def _generate_ticket_id(cursor) -> str:
@@ -145,13 +145,17 @@ def ticket_creation(
         priority = "Medium"
 
     # --- Employee validation ---
-    employees = _load_employees()
-    if employees and employee_id not in employees:
+    try:
+        employees = _load_employees()
+    except Exception:
+        return "❌ Error: Could not validate employee records from database. Please try again."
+
+    if employee_id not in employees:
         return (
             f"❌ Error: Employee ID **{employee_id}** not found in the system. "
             "Please verify your employee ID and try again."
         )
-    employee_name = employees.get(employee_id, {}).get("name", "Unknown") if employees else "Unknown"
+    employee_name = employees[employee_id]["name"]
 
     try:
         conn = get_db_connection()
