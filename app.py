@@ -17,7 +17,7 @@ load_dotenv()
 # Ensure package root is on path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from data.init_db import init_db
+from data.init_db import get_db_connection, init_db
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -113,6 +113,8 @@ def init_session_state():
         "tool_calls_log": [],     # Tool activity log for sidebar
         "turn_count": 0,
         "session_id": str(time.time()),
+        "show_db_admin": False,
+        "db_admin_message": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -129,6 +131,85 @@ def ensure_db():
         except Exception as e:
             logger.error("DB init error: %s", e)
             st.error(f"⚠️ Database initialization failed: {e}")
+
+
+def _fetch_db_rows(table_name: str) -> list[dict]:
+    """Fetch rows from a supported table for DB admin view."""
+    queries = {
+        "employees": """
+            SELECT employee_id, name, email, department, role, manager_name, status, created_at
+            FROM employees
+            ORDER BY employee_id
+        """,
+        "tickets": """
+            SELECT ticket_id, employee_id, employee_name, title, category, priority, status,
+                   created_at, updated_at, resolved_at, assigned_to
+            FROM tickets
+            ORDER BY created_at DESC
+        """,
+    }
+    if table_name not in queries:
+        return []
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(queries[table_name])
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def _db_counts() -> tuple[int, int]:
+    """Return (employees_count, tickets_count)."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM employees")
+    employees_count = int(cursor.fetchone()[0])
+    cursor.execute("SELECT COUNT(*) FROM tickets")
+    tickets_count = int(cursor.fetchone()[0])
+    conn.close()
+    return employees_count, tickets_count
+
+
+def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_action: str = "") -> tuple[bool, str]:
+    """Apply selected-row action from DB admin panel."""
+    if not selected_ids:
+        return False, "Please select at least one row."
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        placeholders = ",".join("?" for _ in selected_ids)
+        if table_name == "tickets":
+            cursor.execute(f"DELETE FROM tickets WHERE ticket_id IN ({placeholders})", tuple(selected_ids))
+            deleted = int(cursor.rowcount)
+            conn.commit()
+            conn.close()
+            return True, f"Deleted {deleted} ticket row(s)."
+
+        if table_name == "employees":
+            if employee_action == "hard_delete":
+                cursor.execute(f"DELETE FROM tickets WHERE employee_id IN ({placeholders})", tuple(selected_ids))
+                deleted_tickets = int(cursor.rowcount)
+                cursor.execute(f"DELETE FROM employees WHERE employee_id IN ({placeholders})", tuple(selected_ids))
+                deleted_employees = int(cursor.rowcount)
+                conn.commit()
+                conn.close()
+                return True, f"Hard deleted {deleted_employees} employee row(s) and {deleted_tickets} linked ticket row(s)."
+
+            cursor.execute(
+                f"UPDATE employees SET status = 'Inactive' WHERE employee_id IN ({placeholders})",
+                tuple(selected_ids),
+            )
+            updated = int(cursor.rowcount)
+            conn.commit()
+            conn.close()
+            return True, f"Deactivated {updated} employee row(s)."
+
+        conn.close()
+        return False, "Unsupported table."
+    except Exception as exc:
+        conn.close()
+        return False, f"DB action failed: {exc}"
 
 
 def get_agent_graph():
@@ -334,6 +415,17 @@ def render_sidebar():
 
         st.divider()
 
+        # ── DB Admin ──
+        st.markdown("### 🗄️ DB Admin")
+        if st.button("📊 View DB Details", use_container_width=True):
+            st.session_state.show_db_admin = True
+            st.rerun()
+        if st.session_state.get("show_db_admin") and st.button("🙈 Hide DB Details", use_container_width=True):
+            st.session_state.show_db_admin = False
+            st.rerun()
+
+        st.divider()
+
         # ── Quick Prompts — clean labels, personalized messages ──
         st.markdown("### 💬 Quick Prompts")
         # Each entry: (button label shown, message sent to agent, optional forced employee ID)
@@ -344,7 +436,6 @@ def render_sidebar():
             ("How do I set up MFA?", "How do I set up MFA on my phone?", None),
             ("I can't access the CRM system", "I can't access the CRM system. Getting a 403 error.", None),
             ("Register a new employee", "I need to register a new employee in the system.", None),
-            ("Delete employee from DB", "Delete employee record from database", None),
         ]
         for label, message, forced_emp_id in quick_prompts:
             if st.button(label, key=f"qp_{label[:20]}", use_container_width=True):
@@ -364,6 +455,64 @@ def render_sidebar():
             st.rerun()
 
 
+def render_db_admin_panel():
+    """Render DB details and selected-row actions."""
+    if not st.session_state.get("show_db_admin"):
+        return
+
+    st.markdown("### 🗄️ Database Details")
+    st.caption("View all rows in DB and apply actions to selected rows only.")
+
+    employees_count, tickets_count = _db_counts()
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Employees", employees_count)
+    with c2:
+        st.metric("Tickets", tickets_count)
+
+    table_name = st.selectbox(
+        "Select table",
+        ["employees", "tickets"],
+        key="db_admin_table",
+    )
+    rows = _fetch_db_rows(table_name)
+    st.caption(f"Rows in `{table_name}`: {len(rows)}")
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    id_field = "employee_id" if table_name == "employees" else "ticket_id"
+    selectable_ids = [str(r[id_field]) for r in rows if r.get(id_field)]
+    selected_ids = st.multiselect(
+        f"Select {table_name} rows by `{id_field}`",
+        selectable_ids,
+        key=f"db_select_{table_name}",
+    )
+
+    employee_action = ""
+    if table_name == "employees":
+        action_label = st.radio(
+            "Employee action",
+            [
+                "Deactivate selected employees (keep tickets)",
+                "Hard delete selected employees + linked tickets",
+            ],
+            key="db_employee_action",
+        )
+        employee_action = "hard_delete" if action_label.startswith("Hard delete") else "deactivate"
+
+    if st.button("Apply selected-row action", type="primary", use_container_width=True):
+        ok, msg = _apply_db_row_action(table_name, selected_ids, employee_action=employee_action)
+        st.session_state.db_admin_message = ("success" if ok else "error", msg)
+        st.rerun()
+
+    db_msg = st.session_state.get("db_admin_message")
+    if db_msg:
+        level, text = db_msg
+        if level == "success":
+            st.success(text)
+        else:
+            st.error(text)
+
+
 # ── Main Chat Interface ───────────────────────────────────────────────────────
 def render_main():
     """Render the main chat interface."""
@@ -375,6 +524,8 @@ def render_main():
         <p>Powered by Agentic AI · Ask me anything about IT support</p>
     </div>
     """, unsafe_allow_html=True)
+
+    render_db_admin_panel()
 
     # Display chat history
     chat_container = st.container()
