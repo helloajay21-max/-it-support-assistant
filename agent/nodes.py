@@ -883,6 +883,11 @@ def response_node(state: AgentState) -> dict:
     """
     logger.info("Response node executing")
 
+    # For operational tool outputs, preserve exact structured result from tools.
+    # This avoids LLM rewording that can misreport create/delete outcomes.
+    if state.intent in {"ticket_lookup", "ticket_creation", "employee_registration", "employee_deletion"} and state.tool_output:
+        return {"messages": [AIMessage(content=state.tool_output)], "tool_output": None}
+
     # If no tool was called (general intent), generate direct response
     if not state.tool_output:
         messages = [SystemMessage(content=SYSTEM_PROMPT)] + list(state.messages[-10:])
@@ -892,11 +897,6 @@ def response_node(state: AgentState) -> dict:
         except Exception as e:
             logger.error("LLM response error: %s", e)
             return {"messages": [AIMessage(content="I'm sorry, I encountered an error processing your request. Please try again.")], "tool_output": None}
-
-    # For structured tool outputs (especially ticket lookup), preserve the
-    # exact formatter output instead of re-summarizing via LLM.
-    if state.intent == "ticket_lookup":
-        return {"messages": [AIMessage(content=state.tool_output)], "tool_output": None}
 
     # Generate response incorporating tool output
     tool_output = state.tool_output
@@ -1117,8 +1117,18 @@ def employee_registration_node(state: AgentState) -> dict:
         logger.error("create_employee tool error: %s", exc)
         result = "❌ Error: Failed to register employee. Please try again or contact the system administrator."
 
+    # Persist created employee identity in conversation state so subsequent
+    # ticket actions use the newly created employee without asking again.
+    created_emp_id = None
+    if isinstance(result, str):
+        m = re.search(r"\bEMP\d{4,}\b", result, re.IGNORECASE)
+        if m:
+            created_emp_id = m.group(0).upper()
+
     return {
         "tool_output": result,
+        "employee_id": created_emp_id or state.employee_id,
+        "employee_name": pending.get("name", state.employee_name),
         "pending_employee": None,
         "awaiting_info": False,
         "awaiting_field": None,
