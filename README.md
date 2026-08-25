@@ -205,6 +205,19 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 |----------|----------|---------|-------------|
 | `LOG_LEVEL` | ❌ | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`) |
 | `ENABLE_FILE_LOG` | ❌ | `false` | Write logs to `logs/` directory |
+| `ADMIN_EMAIL` | ❌ | `helloajay21@gmail.com` | Admin inbox that receives VPN onboarding/reset notifications as a copy |
+
+### SMTP Settings (for real VPN email delivery)
+
+| Variable | Required | Example Value | Description |
+|----------|----------|---------------|-------------|
+| `SMTP_HOST` | ✅ | `smtp.office365.com` | SMTP server host |
+| `SMTP_PORT` | ✅ | `587` | SMTP port |
+| `SMTP_USERNAME` | ✅ | `helloajay21@gmail.com` | SMTP login username |
+| `SMTP_PASSWORD` | ✅ | `your-smtp-password` | SMTP login password |
+| `SMTP_FROM_EMAIL` | ✅ | `helloajay21@gmail.com` | Sender email used for VPN notifications |
+| `SMTP_USE_TLS` | ❌ | `true` | Enable STARTTLS for SMTP |
+| `VPN_RESET_BASE_URL` | ❌ | `https://selfservice.techcorp.com/reset-vpn` | Link included in reset email |
 
 ---
 

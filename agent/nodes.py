@@ -6,7 +6,12 @@ Each node represents a processing step in the agent pipeline.
 import json
 import os
 import re
+import secrets
+import smtplib
+import ssl
+import string
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -117,10 +122,59 @@ def _is_valid_email(email: str) -> bool:
     return bool(re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", email.strip()))
 
 
-def _queue_vpn_email_dispatches(employee_id: str, employee_email: str) -> tuple[bool, str]:
+def _generate_temp_password(length: int = 14) -> str:
+    """Generate a strong temporary password for first-time VPN access."""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    pwd = [secrets.choice(string.ascii_uppercase), secrets.choice(string.ascii_lowercase),
+           secrets.choice(string.digits), secrets.choice("!@#$%^&*")]
+    pwd.extend(secrets.choice(alphabet) for _ in range(max(0, length - 4)))
+    secrets.SystemRandom().shuffle(pwd)
+    return "".join(pwd)
+
+
+def _smtp_settings() -> dict:
+    """Read SMTP settings from environment variables."""
+    return {
+        "host": os.getenv("SMTP_HOST", "").strip(),
+        "port": int(os.getenv("SMTP_PORT", "587")),
+        "username": os.getenv("SMTP_USERNAME", "").strip(),
+        "password": os.getenv("SMTP_PASSWORD", "").strip(),
+        "from_email": os.getenv("SMTP_FROM_EMAIL", "").strip(),
+        "use_tls": os.getenv("SMTP_USE_TLS", "true").strip().lower() in ("1", "true", "yes"),
+    }
+
+
+def _send_email(to_email: str, subject: str, body: str, admin_email: str | None = None) -> tuple[bool, str]:
+    """Send an email via SMTP using configured environment settings."""
+    cfg = _smtp_settings()
+    if not cfg["host"] or not cfg["from_email"]:
+        return False, "SMTP not configured (SMTP_HOST/SMTP_FROM_EMAIL missing)"
+
+    msg = EmailMessage()
+    msg["From"] = cfg["from_email"]
+    msg["To"] = to_email
+    if admin_email and admin_email.strip().lower() != to_email.strip().lower():
+        msg["Cc"] = admin_email
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=25) as server:
+            if cfg["use_tls"]:
+                server.starttls(context=ssl.create_default_context())
+            if cfg["username"]:
+                server.login(cfg["username"], cfg["password"])
+            server.send_message(msg)
+        return True, "Sent"
+    except Exception as exc:
+        logger.error("SMTP send failed to %s: %s", to_email, exc)
+        return False, f"SMTP send failed: {exc}"
+
+
+def _queue_vpn_email_dispatches(employee_id: str, employee_email: str, employee_name: str = "Employee") -> tuple[bool, str]:
     """
-    Queue both first-time setup and reset-password emails for a valid employee email.
-    Persists in DB log so dispatches are visible in the admin panel.
+    Send and log both first-time setup and reset-password emails for a valid employee email.
+    Persists outcome in DB log (Sent/Failed) for operational visibility.
     """
     if not employee_id or not _is_valid_email(employee_email):
         return False, "Email validation failed"
@@ -129,25 +183,41 @@ def _queue_vpn_email_dispatches(employee_id: str, employee_email: str) -> tuple[
         conn = get_db_connection()
         cursor = conn.cursor()
         now = datetime.now().isoformat()
+        normalized_email = employee_email.strip().lower()
+        admin_email = os.getenv("ADMIN_EMAIL", "helloajay21@gmail.com").strip().lower()
+        reset_base = os.getenv("VPN_RESET_BASE_URL", "https://selfservice.techcorp.com/reset-vpn")
+        reset_token = secrets.token_urlsafe(20)
+        reset_link = f"{reset_base}?employee_id={employee_id}&token={reset_token}"
+        temp_password = _generate_temp_password()
+
+        first_time_subject = f"TechCorp VPN First-Time Setup - {employee_id}"
+        first_time_body = (
+            f"Hello {employee_name},\n\n"
+            f"Your first-time VPN setup request is approved.\n\n"
+            f"Employee ID: {employee_id}\n"
+            f"Temporary VPN Password: {temp_password}\n"
+            f"Activation / Reset Link: {reset_link}\n\n"
+            f"Next steps:\n"
+            f"1. Open Cisco AnyConnect\n"
+            f"2. Login with your Employee ID and temporary password\n"
+            f"3. Set your permanent password when prompted\n\n"
+            f"If you face issues, reply to this email or contact IT Helpdesk.\n"
+        )
+        reset_subject = f"TechCorp VPN Password Reset - {employee_id}"
+        reset_body = (
+            f"Hello {employee_name},\n\n"
+            f"Use the link below to reset your VPN password:\n"
+            f"{reset_link}\n\n"
+            f"This link expires in 30 minutes.\n"
+            f"If you did not request this, contact IT Helpdesk immediately.\n"
+        )
+
+        sent_ok_1, msg_1 = _send_email(normalized_email, first_time_subject, first_time_body, admin_email)
+        sent_ok_2, msg_2 = _send_email(normalized_email, reset_subject, reset_body, admin_email)
+
         rows = [
-            (
-                employee_id,
-                employee_email.strip().lower(),
-                "VPN_FIRST_TIME_SETUP",
-                "email",
-                "Queued",
-                now,
-                "Auto-triggered from assistant VPN guidance flow",
-            ),
-            (
-                employee_id,
-                employee_email.strip().lower(),
-                "VPN_PASSWORD_RESET",
-                "email",
-                "Queued",
-                now,
-                "Auto-triggered from assistant VPN guidance flow",
-            ),
+            (employee_id, normalized_email, "VPN_FIRST_TIME_SETUP", "email", "Sent" if sent_ok_1 else "Failed", now, msg_1),
+            (employee_id, normalized_email, "VPN_PASSWORD_RESET", "email", "Sent" if sent_ok_2 else "Failed", now, msg_2),
         ]
         cursor.executemany(
             """
@@ -159,7 +229,9 @@ def _queue_vpn_email_dispatches(employee_id: str, employee_email: str) -> tuple[
         )
         conn.commit()
         conn.close()
-        return True, "Queued first-time setup + reset password emails"
+        if sent_ok_1 and sent_ok_2:
+            return True, "Sent first-time setup + reset password emails"
+        return False, f"Email dispatch partial/failed: first-time={msg_1}; reset={msg_2}"
     except Exception as exc:
         logger.error("Failed to queue VPN email dispatches: %s", exc)
         return False, "Dispatch queue failed"
@@ -516,11 +588,11 @@ def knowledge_search_node(state: AgentState) -> dict:
         emp_name = profile.get("name", state.employee_name or "Employee")
         mgr = profile.get("manager_name", "your manager")
         email = profile.get("email", "your registered work email")
-        dispatch_ok, _dispatch_msg = _queue_vpn_email_dispatches(state.employee_id, email)
+        dispatch_ok, dispatch_msg = _queue_vpn_email_dispatches(state.employee_id, email, emp_name)
         dispatch_note = (
-            f"✅ Dispatched **first-time setup** and **password reset** emails to **{email}**."
+            f"✅ Sent **first-time setup** and **password reset** emails to **{email}**."
             if dispatch_ok
-            else f"⚠️ Could not auto-dispatch VPN emails because the linked email is invalid/missing (**{email}**)."
+            else f"⚠️ Could not send VPN emails: {dispatch_msg}."
         )
         onboarding_msg = (
             f"🔐 **First-Time VPN Setup for {emp_name} ({state.employee_id})**\n\n"
@@ -554,15 +626,19 @@ def knowledge_search_node(state: AgentState) -> dict:
         if vpn_related and state.employee_id:
             profile = _employee_profile(state.employee_id)
             email = profile.get("email", "")
-            dispatch_ok, _ = _queue_vpn_email_dispatches(state.employee_id, email)
+            dispatch_ok, dispatch_msg = _queue_vpn_email_dispatches(
+                state.employee_id,
+                email,
+                profile.get("name", state.employee_name or "Employee"),
+            )
             if dispatch_ok:
                 result += (
                     f"\n\n---\n📧 **Dispatch Update:** "
-                    f"Queued both first-time VPN setup and password-reset emails to **{email}**."
+                    f"Sent both first-time VPN setup and password-reset emails to **{email}**."
                 )
             else:
                 result += (
-                    f"\n\n---\n⚠️ **Dispatch Update:** Could not queue VPN emails because the linked email is invalid or missing."
+                    f"\n\n---\n⚠️ **Dispatch Update:** Could not send VPN emails ({dispatch_msg})."
                 )
         logger.info("Knowledge search completed successfully")
     except Exception as e:
