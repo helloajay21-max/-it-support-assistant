@@ -102,18 +102,30 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
                 (employee_id,)
             )
             rows = cursor.fetchall()
-            conn.close()
 
             if not rows:
+                # Look up employee name for a personalised response
+                cursor.execute("SELECT name FROM employees WHERE employee_id = ?", (employee_id,))
+                emp_row = cursor.fetchone()
+                emp_name = emp_row["name"] if emp_row else employee_id
+                conn.close()
                 return (
-                    f"No support tickets found for employee **{employee_id}**. "
-                    "You have no open or past tickets in the system."
+                    f"📭 **No tickets found for {emp_name} ({employee_id})**\n\n"
+                    f"There are currently no open or past IT support tickets in the system.\n\n"
+                    f"💡 **Need IT help?** I can raise a new support ticket right now.\n"
+                    f"Just describe your issue and I'll take care of the rest!"
                 )
+
+            # Look up employee name for personalised header
+            cursor.execute("SELECT name FROM employees WHERE employee_id = ?", (employee_id,))
+            emp_name_row = cursor.fetchone()
+            display_name = f"{emp_name_row['name']} ({employee_id})" if emp_name_row else employee_id
+            conn.close()
 
             open_tickets = [r for r in rows if r["status"] not in ("Resolved", "Closed")]
             resolved_tickets = [r for r in rows if r["status"] in ("Resolved", "Closed")]
 
-            result_parts = [f"📋 **Support Tickets for {employee_id}** — {len(rows)} ticket(s) found:\n"]
+            result_parts = [f"📋 **Support Tickets for {display_name}** — {len(rows)} ticket(s) found:\n"]
 
             if open_tickets:
                 result_parts.append(f"**Active Tickets ({len(open_tickets)}):**\n")

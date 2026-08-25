@@ -203,6 +203,51 @@ def init_db():
             "resolved_at": (datetime.now() - timedelta(days=6)).isoformat(),
             "assigned_to": "IT Team - Identity",
             "resolution_notes": "Old MFA device removed from account. New authenticator setup completed via IT-assisted session."
+        },
+        {
+            "ticket_id": "TKT-2024-009",
+            "employee_id": "EMP1025",
+            "employee_name": "Ajay Kumar",
+            "title": "VPN disconnects repeatedly during work hours",
+            "description": "Cisco AnyConnect VPN keeps disconnecting every 15–20 minutes while working from home. Reconnecting is possible but disrupts ongoing meetings and file transfers.",
+            "category": "VPN",
+            "priority": "High",
+            "status": "In Progress",
+            "created_at": (datetime.now() - timedelta(days=2)).isoformat(),
+            "updated_at": (datetime.now() - timedelta(hours=6)).isoformat(),
+            "resolved_at": None,
+            "assigned_to": "IT Team - Network",
+            "resolution_notes": "Network logs collected. Suspected MTU mismatch — fix being tested in staging."
+        },
+        {
+            "ticket_id": "TKT-2024-010",
+            "employee_id": "EMP1025",
+            "employee_name": "Ajay Kumar",
+            "title": "Request access to Azure DevOps project board",
+            "description": "Need read/write access to the Capstone-IIT project board in Azure DevOps to push code and review pipelines. Manager Carol Davis has approved.",
+            "category": "Access",
+            "priority": "Medium",
+            "status": "Resolved",
+            "created_at": (datetime.now() - timedelta(days=5)).isoformat(),
+            "updated_at": (datetime.now() - timedelta(days=4)).isoformat(),
+            "resolved_at": (datetime.now() - timedelta(days=4)).isoformat(),
+            "assigned_to": "IT Team - Access Management",
+            "resolution_notes": "Access granted to Azure DevOps org. User added to Capstone-IIT project with Contributor role."
+        },
+        {
+            "ticket_id": "TKT-2024-011",
+            "employee_id": "EMP1025",
+            "employee_name": "Ajay Kumar",
+            "title": "Laptop screen flickering on external monitor",
+            "description": "When connected to an external 4K monitor via HDMI, the display flickers intermittently. Issue started after the latest Windows update. Internal screen is fine.",
+            "category": "Hardware",
+            "priority": "Low",
+            "status": "Open",
+            "created_at": (datetime.now() - timedelta(hours=12)).isoformat(),
+            "updated_at": (datetime.now() - timedelta(hours=12)).isoformat(),
+            "resolved_at": None,
+            "assigned_to": "IT Team - Hardware",
+            "resolution_notes": None
         }
     ]
 

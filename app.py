@@ -327,7 +327,7 @@ def render_sidebar():
         quick_prompts = [
             ("How do I reset my VPN password?",
              "How do I reset my VPN password?"),
-            ("Check my ticket status",
+            (f"Check my ticket status ({AUTHOR_EMP_ID})",
              f"What is the status of my tickets? My employee ID is {AUTHOR_EMP_ID}."),
             ("My laptop is slow — raise a ticket",
              f"My laptop is very slow and hanging. Please raise a support ticket. My employee ID is {AUTHOR_EMP_ID}."),
