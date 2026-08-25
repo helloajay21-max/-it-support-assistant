@@ -61,6 +61,27 @@ def _employee_profile(cursor, employee_id: str) -> dict:
         return {}
 
 
+def _linked_employee_ids(cursor, employee_id: str, profile: dict) -> list[str]:
+    """
+    Return all employee IDs linked to the same person.
+    Current heuristic:
+    - same name (case-insensitive) as the provided employee profile
+    """
+    if not profile or not profile.get("name"):
+        return [employee_id]
+    try:
+        cursor.execute(
+            "SELECT employee_id FROM employees WHERE LOWER(name) = LOWER(?) ORDER BY employee_id",
+            (profile["name"],)
+        )
+        ids = [r["employee_id"] for r in cursor.fetchall()]
+        if employee_id not in ids:
+            ids.insert(0, employee_id)
+        return ids
+    except Exception:
+        return [employee_id]
+
+
 @tool
 def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
     """
@@ -89,20 +110,24 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
         conn = get_db_connection()
         cursor = conn.cursor()
         profile = _employee_profile(cursor, employee_id)
+        linked_ids = _linked_employee_ids(cursor, employee_id, profile)
 
         # ── Single-ticket lookup ───────────────────────────────────────────────
         if ticket_id:
             ticket_id = ticket_id.strip().upper()
-            cursor.execute(
-                "SELECT * FROM tickets WHERE ticket_id = ? AND employee_id = ?",
-                (ticket_id, employee_id)
+            placeholders = ",".join("?" for _ in linked_ids)
+            query = (
+                f"SELECT * FROM tickets WHERE ticket_id = ? "
+                f"AND employee_id IN ({placeholders}) "
+                f"ORDER BY created_at DESC LIMIT 1"
             )
+            cursor.execute(query, (ticket_id, *linked_ids))
             row = cursor.fetchone()
             conn.close()
             if not row:
                 return (
-                    f"No ticket found with ID `{ticket_id}` for employee `{employee_id}`. "
-                    "Please verify both IDs are correct."
+                    f"No ticket found with ID `{ticket_id}` under linked IDs "
+                    f"`{', '.join(linked_ids)}`."
                 )
             emp_label = profile.get("name", employee_id)
             detail = (
@@ -117,10 +142,12 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
             return detail
 
         # ── All-tickets lookup ─────────────────────────────────────────────────
-        cursor.execute(
-            "SELECT * FROM tickets WHERE employee_id = ? ORDER BY created_at DESC",
-            (employee_id,)
+        placeholders = ",".join("?" for _ in linked_ids)
+        query = (
+            f"SELECT * FROM tickets WHERE employee_id IN ({placeholders}) "
+            f"ORDER BY created_at DESC"
         )
+        cursor.execute(query, tuple(linked_ids))
         rows = cursor.fetchall()
         conn.close()
 
@@ -128,6 +155,7 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
             emp_name = profile.get("name", employee_id)
             return (
                 f"📭 **No tickets found for {emp_name} ({employee_id})**\n\n"
+                f"Searched linked employee IDs: `{', '.join(linked_ids)}`.\n\n"
                 f"There are currently no open or past IT support tickets in the system.\n\n"
                 f"💡 **Need IT help?** I can raise a new support ticket right now.\n"
                 f"Just describe your issue and I'll take care of the rest!"
@@ -142,6 +170,7 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
             f"| 🏢 Department | {profile.get('department', 'N/A')} |",
             f"| 💼 Role | {profile.get('role', 'N/A')} |",
             f"| 👔 Manager | {profile.get('manager_name', 'N/A')} |",
+            f"| 🆔 Linked Employee IDs | {', '.join(linked_ids)} |",
             "",
         ]
 
