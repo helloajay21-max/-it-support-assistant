@@ -13,7 +13,8 @@ param(
   [string]$ResourceGroup = "your-resource-group",
   [string]$WebApp       = "your-webapp-name",
   [string]$SubscriptionId = "00000000-0000-0000-0000-000000000000",
-  [string]$SqliteDbPath = "data/tickets.db"
+  [string]$SqliteDbPath = "data/tickets.db",
+  [string]$AdminEmail   = "helloajay21@gmail.com"
 )
 
 if ($OpenAIKey -ne "") {
@@ -44,10 +45,12 @@ if ($SubscriptionId -ne "") {
 setx IMAGE_NAME "it-support-assistant" | Out-Null
 setx OPENAI_MODEL "gpt-4o-mini" | Out-Null
 setx WEBSITES_PORT "8501" | Out-Null
+setx WEBSITES_ENABLE_APP_SERVICE_STORAGE "true" | Out-Null
 setx SQLITE_DB_PATH $SqliteDbPath | Out-Null
+setx ADMIN_EMAIL $AdminEmail | Out-Null
 
 Write-Host ""
 Write-Host "Local env vars set. Open a NEW terminal to use them." -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Reminder: Add these as GitHub repository secrets:" -ForegroundColor Yellow
-Write-Host "  AZURE_CREDENTIALS, DOCKERHUB_USERNAME, DOCKERHUB_TOKEN, RESOURCE_GROUP, WEBAPP_NAME, OPENAI_API_KEY"
+Write-Host "  AZURE_CREDENTIALS, DOCKERHUB_USERNAME, DOCKERHUB_TOKEN, RESOURCE_GROUP, WEBAPP_NAME, OPENAI_API_KEY, ADMIN_EMAIL, SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM_EMAIL, SMTP_USE_TLS, VPN_RESET_BASE_URL"

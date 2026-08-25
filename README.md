@@ -1,9 +1,9 @@
 # 🖥️ IT Support Assistant — AI Operations Assistant Using Agentic AI
 
 > **Capstone Project | IIT | AI Operations Assistant**  
-> An intelligent IT support agent built with **LangGraph**, **LangChain**, and **Streamlit**, deployed on **Azure Container Apps** via GitHub Actions CI/CD.
+> An intelligent IT support agent built with **LangGraph**, **LangChain**, and **Streamlit**, deployed on **Azure App Service (container)** via GitHub Actions CI/CD.
 
-[![Deploy to Azure](https://github.com/YOUR_USERNAME/it-support-assistant/actions/workflows/azure-deploy.yml/badge.svg)](https://github.com/YOUR_USERNAME/it-support-assistant/actions/workflows/azure-deploy.yml)
+[![Deploy to Azure](https://github.com/helloajay21-max/-it-support-assistant/actions/workflows/azure-deploy.yml/badge.svg)](https://github.com/helloajay21-max/-it-support-assistant/actions/workflows/azure-deploy.yml)
 
 ---
 
@@ -24,7 +24,7 @@ An **Agentic AI system** where an LLM acts as an intelligent agent that:
 3. **Executes** the appropriate tool with validated parameters
 4. **Maintains state** across multi-turn conversations
 5. **Returns** a formatted, professional response
-6. **Queues operational emails** (e.g., VPN first-time setup + reset) to the employee-linked email when valid
+6. **Sends and logs operational emails** (e.g., VPN first-time setup + reset) to the employee-linked email when valid
 
 ---
 
@@ -85,8 +85,8 @@ AgentState {
 | Local Database | SQLite (Python built-in `sqlite3`) |
 | Sample Data | JSON files (knowledge base, employees) |
 | Container | Docker |
-| Cloud Hosting | Azure Container Apps |
-| Container Registry | Azure Container Registry (ACR) |
+| Cloud Hosting | Azure App Service (custom container) |
+| Container Registry | Docker Hub |
 | CI/CD | GitHub Actions |
 | Language | Python 3.11 |
 
@@ -125,9 +125,15 @@ it-support-assistant/
 │   └── config.toml                   ← Streamlit theme + server settings
 │
 ├── azure/
-│   ├── setup-infra.sh                ← One-click Azure resource provisioning
-│   ├── deploy.sh                     ← Manual deploy script
-│   └── containerapp.yaml             ← Container Apps config
+│   ├── deploy.sh                     ← Manual container deploy helper
+│   └── containerapp.yaml             ← Legacy container app manifest
+│
+├── scripts/
+│   ├── create_azure_resources.sh     ← Azure App Service provisioning
+│   ├── create_service_principal.sh   ← GitHub Actions service principal helper
+│   ├── set_env.ps1                   ← Local env helper
+│   └── README_ENV.md                 ← Env + GitHub secrets setup notes
+│
 │
 ├── .github/
 │   └── workflows/
@@ -203,6 +209,8 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `SQLITE_DB_PATH` | ❌ | `data/tickets.db` | SQLite database file path |
+| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | Azure only | `true` | Keeps `/home` persistent for App Service SQLite storage |
 | `LOG_LEVEL` | ❌ | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`) |
 | `ENABLE_FILE_LOG` | ❌ | `false` | Write logs to `logs/` directory |
 | `ADMIN_EMAIL` | ❌ | `helloajay21@gmail.com` | Admin inbox that receives VPN onboarding/reset notifications as a copy |
@@ -211,11 +219,11 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 
 | Variable | Required | Example Value | Description |
 |----------|----------|---------------|-------------|
-| `SMTP_HOST` | ✅ | `smtp.office365.com` | SMTP server host |
+| `SMTP_HOST` | ✅ | `smtp.gmail.com` | SMTP server host |
 | `SMTP_PORT` | ✅ | `587` | SMTP port |
-| `SMTP_USERNAME` | ✅ | `helloajay21@gmail.com` | SMTP login username |
-| `SMTP_PASSWORD` | ✅ | `your-smtp-password` | SMTP login password |
-| `SMTP_FROM_EMAIL` | ✅ | `helloajay21@gmail.com` | Sender email used for VPN notifications |
+| `SMTP_USERNAME` | ✅ | `your-mailbox@gmail.com` | SMTP login username |
+| `SMTP_PASSWORD` | ✅ | `app-password-without-spaces` | SMTP login password |
+| `SMTP_FROM_EMAIL` | ✅ | `your-mailbox@gmail.com` | Sender email used for VPN notifications |
 | `SMTP_USE_TLS` | ❌ | `true` | Enable STARTTLS for SMTP |
 | `VPN_RESET_BASE_URL` | ❌ | `https://selfservice.techcorp.com/reset-vpn` | Link included in reset email |
 
@@ -235,47 +243,49 @@ az account show   # confirm correct subscription
 
 ### Step 2 — Provision Azure Infrastructure
 
-Run the one-click setup script to create all Azure resources:
+Run the Azure App Service setup script:
 
 ```bash
-cd azure
-chmod +x setup-infra.sh
-./setup-infra.sh
+chmod +x scripts/create_azure_resources.sh
+./scripts/create_azure_resources.sh
 ```
 
 This script will:
 - ✅ Create a **Resource Group**
-- ✅ Create an **Azure Container Registry** (ACR)
-- ✅ Create a **Container Apps Environment**
-- ✅ Create a **Service Principal** for GitHub Actions
-- ✅ **Print all GitHub Secrets** you need to copy
+- ✅ Create an **App Service Plan**
+- ✅ Create an **Azure Web App**
+- ✅ Enable persistent `/home` storage for SQLite
+- ✅ Apply the base runtime settings for the app
 
-> 💡 The script outputs a ready-to-copy table of all secret values.
+> 💡 Then run `./scripts/create_service_principal.sh` and add the GitHub secrets listed below.
 
 ### Step 3 — Add GitHub Secrets
 
 Go to your GitHub repository → **Settings → Secrets and variables → Actions → New repository secret**
 
-Add these **Secrets** (sensitive values):
+Add these **Secrets**:
 
-| Secret Name | Where to get it | Description |
-|-------------|-----------------|-------------|
-| `AZURE_CREDENTIALS` | Output of `setup-infra.sh` | Service principal JSON for `az login` |
-| `ACR_NAME` | Output of `setup-infra.sh` | Azure Container Registry name (without `.azurecr.io`) |
-| `ACR_USERNAME` | Output of `setup-infra.sh` | ACR admin username |
-| `ACR_PASSWORD` | Output of `setup-infra.sh` | ACR admin password |
-| `AZURE_OPENAI_ENDPOINT` | Azure Portal → your OpenAI resource | e.g. `https://myresource.openai.azure.com/` |
-| `AZURE_OPENAI_API_KEY` | Azure Portal → your OpenAI resource → Keys | Key 1 or Key 2 |
+| Secret Name | Description |
+|-------------|-------------|
+| `AZURE_CREDENTIALS` | Service principal JSON for `az login` |
+| `DOCKERHUB_USERNAME` | Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+| `RESOURCE_GROUP` | Azure resource group that contains the web app |
+| `WEBAPP_NAME` | Azure App Service web app name |
+| `OPENAI_API_KEY` | OpenAI API key used by the assistant |
+| `ADMIN_EMAIL` | Admin copy recipient for VPN notification emails |
+| `SMTP_HOST` | SMTP host, e.g. `smtp.gmail.com` |
+| `SMTP_PORT` | SMTP port, e.g. `587` |
+| `SMTP_USERNAME` | SMTP login username |
+| `SMTP_PASSWORD` | SMTP app password / relay password |
+| `SMTP_FROM_EMAIL` | Sender mailbox used by the app |
+| `SMTP_USE_TLS` | `true` for STARTTLS |
+| `VPN_RESET_BASE_URL` | Link included in VPN reset emails |
 
-Add these **Variables** (non-sensitive config):
-
-| Variable Name | Value | Description |
-|---------------|-------|-------------|
-| `AZURE_RESOURCE_GROUP` | `it-support-assistant-rg` | Resource group name (must match setup script) |
-| `AZURE_CONTAINER_APP_NAME` | `it-support-assistant` | Container app name |
-| `AZURE_LOCATION` | `eastus` | Azure region |
-| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` | Your deployed model name |
-| `AZURE_OPENAI_API_VERSION` | `2024-02-01` | Azure OpenAI API version |
+The deployment workflow applies the runtime configuration on every push to `main`, including:
+- persistent App Service storage (`WEBSITES_ENABLE_APP_SERVICE_STORAGE=true`)
+- SQLite path (`/home/data/tickets.db`)
+- SMTP and VPN notification settings
 
 ### Step 4 — Push to GitHub to Trigger Deployment
 
@@ -287,18 +297,19 @@ git push origin main
 
 GitHub Actions will automatically:
 1. Build the Docker image
-2. Push to Azure Container Registry
-3. Deploy to Azure Container Apps
-4. Output the live URL
+2. Push it to Docker Hub
+3. Update Azure App Service to the new container image
+4. Apply the Azure runtime settings
+5. Restart the web app and output the live URL
 
 ### Step 5 — Get Your Live URL
 
 After the GitHub Action completes, run:
 ```bash
-az containerapp show \
-  --name it-support-assistant \
-  --resource-group it-support-assistant-rg \
-  --query "properties.configuration.ingress.fqdn" -o tsv
+az webapp show \
+  --name your-webapp-name \
+  --resource-group your-resource-group \
+  --query defaultHostName -o tsv
 ```
 
 Or check the GitHub Actions run log for the URL.

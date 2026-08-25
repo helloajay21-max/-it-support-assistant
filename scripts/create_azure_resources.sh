@@ -60,6 +60,7 @@ az webapp config appsettings set \
     -n "$WEBAPP_NAME" \
     --settings \
         WEBSITES_PORT=8501 \
+        WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
         SQLITE_DB_PATH=/home/data/tickets.db \
         OPENAI_MODEL=gpt-4o-mini \
         LOG_LEVEL=INFO \

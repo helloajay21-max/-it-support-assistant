@@ -56,8 +56,17 @@ jobs:
               OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
               OPENAI_MODEL="gpt-4o-mini" \
               WEBSITES_PORT=8501 \
+              WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
               SQLITE_DB_PATH=/home/data/tickets.db \
-              LOG_LEVEL=INFO
+              LOG_LEVEL=INFO \
+              ADMIN_EMAIL="${{ secrets.ADMIN_EMAIL }}" \
+              SMTP_HOST="${{ secrets.SMTP_HOST }}" \
+              SMTP_PORT="${{ secrets.SMTP_PORT }}" \
+              SMTP_USERNAME="${{ secrets.SMTP_USERNAME }}" \
+              SMTP_PASSWORD="${{ secrets.SMTP_PASSWORD }}" \
+              SMTP_FROM_EMAIL="${{ secrets.SMTP_FROM_EMAIL }}" \
+              SMTP_USE_TLS="${{ secrets.SMTP_USE_TLS }}" \
+              VPN_RESET_BASE_URL="${{ secrets.VPN_RESET_BASE_URL }}"
 
       - name: Restart web app
         run: |
@@ -83,4 +92,12 @@ jobs:
 #   WEBAPP_NAME         — your-webapp-name
 #   RESOURCE_GROUP      — your-resource-group
 #   OPENAI_API_KEY      — sk-...
+#   ADMIN_EMAIL         — admin notification inbox
+#   SMTP_HOST           — smtp.gmail.com or your SMTP host
+#   SMTP_PORT           — 587
+#   SMTP_USERNAME       — SMTP login username
+#   SMTP_PASSWORD       — SMTP app password / relay password
+#   SMTP_FROM_EMAIL     — sender mailbox used by the app
+#   SMTP_USE_TLS        — true
+#   VPN_RESET_BASE_URL  — https://selfservice.techcorp.com/reset-vpn
 # ──────────────────────────────────────────────────────

@@ -29,6 +29,14 @@ Add these as **Secrets** (New repository secret):
 | `RESOURCE_GROUP` | `your-resource-group` | Set in your Azure environment |
 | `WEBAPP_NAME` | `your-webapp-name` | Created by `create_azure_resources.sh` |
 | `OPENAI_API_KEY` | `sk-...` | OpenAI API key |
+| `ADMIN_EMAIL` | `helloajay21@gmail.com` | Admin copy recipient for VPN notifications |
+| `SMTP_HOST` | `smtp.gmail.com` | SMTP server host |
+| `SMTP_PORT` | `587` | SMTP port |
+| `SMTP_USERNAME` | `your-mailbox@gmail.com` | SMTP login username |
+| `SMTP_PASSWORD` | `app-password-without-spaces` | SMTP app password / relay password |
+| `SMTP_FROM_EMAIL` | `your-mailbox@gmail.com` | Sender mailbox used by the app |
+| `SMTP_USE_TLS` | `true` | Enable STARTTLS |
+| `VPN_RESET_BASE_URL` | `https://selfservice.techcorp.com/reset-vpn` | Reset link used in notification emails |
 
 ---
 
@@ -46,7 +54,7 @@ chmod +x scripts/create_azure_resources.sh
 chmod +x scripts/create_service_principal.sh
 ./scripts/create_service_principal.sh
 
-# 4. Add all secrets to GitHub (see table above)
+# 4. Add all secrets to GitHub (see table above), including SMTP_* and ADMIN_EMAIL
 
 # 5. Push to main → CI/CD deploys automatically
 git push origin main

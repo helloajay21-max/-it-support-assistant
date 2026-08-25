@@ -3,22 +3,21 @@
 
 Go to: GitHub Repo → Settings → Secrets and variables → Actions → New repository secret
 
-┌──────────────────────┬────────────────────────────────────────────────────────────┐
-│ Secret Name          │ Value                                                      │
-├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ AZURE_CREDENTIALS    │ JSON from: ./scripts/create_service_principal.sh           │
-│                      │ (same format as MCP-Project AZURE_CREDENTIALS)             │
-├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ DOCKERHUB_USERNAME   │ your-dockerhub-username                                    │
-├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ DOCKERHUB_TOKEN      │ Your Docker Hub access token (same as MCP-Project) ✅      │
-├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ RESOURCE_GROUP       │ your-resource-group                                        │
-├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ WEBAPP_NAME          │ your-webapp-name                                           │
-├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ OPENAI_API_KEY       │ sk-...                                                     │
-└──────────────────────┴────────────────────────────────────────────────────────────┘
+| Secret Name | Value |
+| --- | --- |
+| `AZURE_CREDENTIALS` | JSON from `./scripts/create_service_principal.sh` |
+| `DOCKERHUB_USERNAME` | your Docker Hub username |
+| `DOCKERHUB_TOKEN` | your Docker Hub access token |
+| `RESOURCE_GROUP` | your Azure resource group |
+| `WEBAPP_NAME` | your Azure App Service web app name |
+| `OPENAI_API_KEY` | `sk-...` |
+| `ADMIN_EMAIL` | inbox that should receive admin copies, e.g. `helloajay21@gmail.com` |
+| `SMTP_HOST` | `smtp.gmail.com` or your SMTP server |
+| `SMTP_PORT` | `587` |
+| `SMTP_USERNAME` | SMTP login username |
+| `SMTP_PASSWORD` | SMTP app password / relay password |
+| `SMTP_FROM_EMAIL` | sender mailbox used by the app |
+| `SMTP_USE_TLS` | `true` |
+| `VPN_RESET_BASE_URL` | `https://selfservice.techcorp.com/reset-vpn` |
 
-That's it — only 6 secrets needed.
-Set the values for your own Azure and Docker Hub environment.
+The workflow now applies both the Azure runtime settings and the VPN email settings on every deploy, so keep these secrets current.
