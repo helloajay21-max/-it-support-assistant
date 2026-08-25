@@ -218,17 +218,28 @@ def run_agent(user_input: str) -> Optional[str]:
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
+
+# Author identity — shown in sidebar and used in personalized quick prompts
+AUTHOR_NAME     = "Ajay Kumar"
+AUTHOR_EMAIL    = "helloajay21@gmail.com"
+AUTHOR_EMP_ID   = "EMP1025"
+AUTHOR_DEPT     = "IT"
+
+
 def render_sidebar():
     """Render the sidebar with session info, tools, and quick actions."""
     with st.sidebar:
         st.markdown("## 🖥️ IT Support Assistant")
         st.markdown("*Powered by Agentic AI + LangGraph*")
         st.markdown(
-            """
+            f"""
             <div class="author-card">
                 <div class="label">Project Author</div>
-                <div class="name">Ajay Kumar</div>
-                <div class="email">helloajay21@gmail.com</div>
+                <div class="name">{AUTHOR_NAME}</div>
+                <div class="email">{AUTHOR_EMAIL}</div>
+                <div class="email" style="margin-top:3px;color:#0078D4;font-weight:600;">
+                    🆔 {AUTHOR_EMP_ID} &nbsp;·&nbsp; {AUTHOR_DEPT}
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -253,15 +264,33 @@ def render_sidebar():
         # ── Session Info ──
         st.markdown("### 📊 Session Info")
         agent_state = st.session_state.get("agent_state")
+
+        # Resolve employee identity: prefer whatever the agent detected,
+        # fall back to the known author identity for this deployment
+        session_emp_id   = (agent_state.employee_id if agent_state else None) or AUTHOR_EMP_ID
+        session_emp_name = (agent_state.employee_name if agent_state else None) or AUTHOR_NAME
+
         col1, col2 = st.columns(2)
         with col1:
             st.metric("Turns", st.session_state.turn_count)
         with col2:
-            emp_id = (agent_state.employee_id if agent_state else None) or "—"
-            st.metric("Employee", emp_id)
+            st.metric("Employee ID", session_emp_id)
+
+        st.caption(f"👤 {session_emp_name}")
 
         if agent_state and agent_state.awaiting_info:
-            st.warning(f"⏳ Awaiting: **{agent_state.awaiting_field}**")
+            field_labels = {
+                "employee_id":    "Employee ID",
+                "description":    "Issue description",
+                "confirmation":   "Confirmation (Yes/No)",
+                "emp_name":       "Employee name",
+                "emp_email":      "Employee email",
+                "emp_department": "Department",
+                "emp_role":       "Role / Job title",
+                "emp_confirmation": "Confirmation (Yes/No)",
+            }
+            friendly = field_labels.get(agent_state.awaiting_field, agent_state.awaiting_field)
+            st.warning(f"⏳ Awaiting: **{friendly}**")
 
         st.divider()
 
@@ -292,12 +321,12 @@ def render_sidebar():
 
         st.divider()
 
-        # ── Quick Prompts ──
+        # ── Quick Prompts — personalized with author identity ──
         st.markdown("### 💬 Quick Prompts")
         quick_prompts = [
             "How do I reset my VPN password?",
-            "What is the status of my tickets? (EMP1024)",
-            "My laptop is very slow. Please raise a ticket.",
+            f"What is the status of my tickets? ({AUTHOR_EMP_ID})",
+            f"My laptop is very slow. Raise a ticket for {AUTHOR_EMP_ID}.",
             "How do I set up MFA?",
             "I can't access the CRM system.",
             "Register a new employee",
@@ -335,8 +364,8 @@ def render_main():
     chat_container = st.container()
     with chat_container:
         if not st.session_state.messages:
-            st.markdown("""
-            👋 **Welcome to TechCorp IT Support!**
+            st.markdown(f"""
+            👋 **Welcome, {AUTHOR_NAME}!**
 
             I'm your AI IT Support Assistant. I can help you with:
             - 🔍 **Troubleshooting** — Step-by-step guides for common IT issues
@@ -346,9 +375,9 @@ def render_main():
 
             **Try asking:**
             - *"How do I reset my VPN password?"*
-            - *"Check tickets for EMP1024"*
+            - *"Check tickets for {AUTHOR_EMP_ID}"*
             - *"My laptop won't turn on, please raise a ticket"*
-            - *"Register a new employee: Ajay Kumar, ajay@techcorp.com, IT department"*
+            - *"Register a new employee: Jane Smith, jane@techcorp.com, Engineering"*
             """)
         else:
             for msg in st.session_state.messages:

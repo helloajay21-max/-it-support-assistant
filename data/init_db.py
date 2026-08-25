@@ -20,6 +20,11 @@ EMPLOYEES_JSON = os.path.join(os.path.dirname(__file__), "employees.json")
 
 def init_db():
     """Initialize the SQLite database with schema and sample data."""
+    # Ensure the parent directory exists (critical for Azure /home/data/ path)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -222,9 +227,13 @@ def init_db():
 
 
 def get_db_connection():
-    """Return a database connection."""
+    """Return a database connection, initializing the DB if it doesn't exist."""
     if not os.path.exists(DB_PATH):
         init_db()
+    # Ensure directory exists even if init_db was skipped (e.g. cold Azure start)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
