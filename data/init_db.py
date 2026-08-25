@@ -36,10 +36,16 @@ def init_db():
             email        TEXT NOT NULL UNIQUE,
             department   TEXT NOT NULL,
             role         TEXT NOT NULL DEFAULT 'Employee',
+            manager_name TEXT NOT NULL DEFAULT 'N/A',
             status       TEXT NOT NULL DEFAULT 'Active',
             created_at   TEXT NOT NULL
         )
     """)
+    # Migration: add manager_name to pre-existing DBs that lack the column
+    try:
+        cursor.execute("ALTER TABLE employees ADD COLUMN manager_name TEXT NOT NULL DEFAULT 'N/A'")
+    except Exception:
+        pass  # Column already exists
 
     # Seed employees from JSON if the table is empty
     cursor.execute("SELECT COUNT(*) FROM employees")
@@ -51,18 +57,33 @@ def init_db():
             for emp in employees:
                 cursor.execute("""
                     INSERT OR IGNORE INTO employees
-                    (employee_id, name, email, department, role, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, 'Active', ?)
+                    (employee_id, name, email, department, role, manager_name, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'Active', ?)
                 """, (
                     emp["employee_id"],
                     emp["name"],
                     emp["email"],
                     emp["department"],
                     emp.get("role", "Employee"),
+                    emp.get("manager", "N/A"),
                     seed_ts,
                 ))
         except (FileNotFoundError, json.JSONDecodeError) as exc:
             print(f"Warning: could not seed employees from JSON: {exc}")
+    else:
+        # Back-fill manager_name for any rows where it is still 'N/A'
+        try:
+            with open(EMPLOYEES_JSON, "r", encoding="utf-8") as f:
+                employees_json = json.load(f)
+            for emp in employees_json:
+                mgr = emp.get("manager", "N/A")
+                if mgr and mgr != "N/A":
+                    cursor.execute(
+                        "UPDATE employees SET manager_name = ? WHERE employee_id = ? AND manager_name = 'N/A'",
+                        (mgr, emp["employee_id"])
+                    )
+        except Exception:
+            pass
 
     # ── Tickets table ──────────────────────────────────────────────────────────
     cursor.execute("""
@@ -82,6 +103,16 @@ def init_db():
             resolution_notes TEXT
         )
     """)
+
+    # Resolve Ajay Kumar's manager name dynamically from JSON data
+    _emp1025_manager = "my manager"
+    try:
+        with open(EMPLOYEES_JSON, "r", encoding="utf-8") as _f:
+            _all_emps = json.load(_f)
+        _emp1025 = next((e for e in _all_emps if e["employee_id"] == "EMP1025"), {})
+        _emp1025_manager = _emp1025.get("manager", "my manager")
+    except Exception:
+        pass
 
     sample_tickets = [
         {
@@ -224,7 +255,7 @@ def init_db():
             "employee_id": "EMP1025",
             "employee_name": "Ajay Kumar",
             "title": "Request access to Azure DevOps project board",
-            "description": "Need read/write access to the Capstone-IIT project board in Azure DevOps to push code and review pipelines. Manager Carol Davis has approved.",
+            "description": f"Need read/write access to the Capstone-IIT project board in Azure DevOps to push code and review CI/CD pipelines. Approved by manager {_emp1025_manager}.",
             "category": "Access",
             "priority": "Medium",
             "status": "Resolved",
