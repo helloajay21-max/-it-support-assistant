@@ -98,5 +98,15 @@
     "location": "Seattle",
     "manager": "Bob Williams",
     "phone": "+1-206-555-0124"
+  },
+  {
+    "employee_id": "EMP1025",
+    "name": "Ajay Kumar",
+    "email": "helloajay21@gmail.com",
+    "department": "IT",
+    "role": "IT Support Engineer",
+    "location": "India",
+    "manager": "Carol Davis",
+    "phone": "N/A"
   }
 ]

@@ -321,19 +321,26 @@ def render_sidebar():
 
         st.divider()
 
-        # ── Quick Prompts — personalized with author identity ──
+        # ── Quick Prompts — clean labels, personalized messages ──
         st.markdown("### 💬 Quick Prompts")
+        # Each entry: (button label shown, message sent to agent)
         quick_prompts = [
-            "How do I reset my VPN password?",
-            f"What is the status of my tickets? ({AUTHOR_EMP_ID})",
-            f"My laptop is very slow. Raise a ticket for {AUTHOR_EMP_ID}.",
-            "How do I set up MFA?",
-            "I can't access the CRM system.",
-            "Register a new employee",
+            ("How do I reset my VPN password?",
+             "How do I reset my VPN password?"),
+            ("Check my ticket status",
+             f"What is the status of my tickets? My employee ID is {AUTHOR_EMP_ID}."),
+            ("My laptop is slow — raise a ticket",
+             f"My laptop is very slow and hanging. Please raise a support ticket. My employee ID is {AUTHOR_EMP_ID}."),
+            ("How do I set up MFA?",
+             "How do I set up MFA on my phone?"),
+            ("I can't access the CRM system",
+             "I can't access the CRM system. Getting a 403 error."),
+            ("Register a new employee",
+             "I need to register a new employee in the system."),
         ]
-        for prompt in quick_prompts:
-            if st.button(prompt, key=f"qp_{prompt[:20]}", use_container_width=True):
-                st.session_state["pending_quick_prompt"] = prompt
+        for label, message in quick_prompts:
+            if st.button(label, key=f"qp_{label[:20]}", use_container_width=True):
+                st.session_state["pending_quick_prompt"] = message
                 st.rerun()
 
         st.divider()

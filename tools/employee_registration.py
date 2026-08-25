@@ -8,6 +8,8 @@ import re
 import sys
 from datetime import datetime
 
+from typing import Optional
+
 from langchain_core.tools import tool
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -48,6 +50,7 @@ def create_employee(
     email: str,
     department: str,
     role: str = "Employee",
+    employee_id: Optional[str] = None,
 ) -> str:
     """
     Register a new employee in the IT support system.
@@ -57,16 +60,20 @@ def create_employee(
     The tool:
     1. Validates all required fields (name, email, department).
     2. Checks that the email address is not already registered.
-    3. Generates the next unique sequential Employee ID.
+    3. Uses the preferred employee_id if provided and available, otherwise
+       generates the next unique sequential Employee ID automatically.
     4. Stores the employee record with status 'Active'.
     5. Returns the new Employee ID and full record summary.
 
     Args:
-        name:       Full name of the new employee (e.g. 'Ajay Kumar'). Required.
-        email:      Work email address (e.g. 'ajay@techcorp.com'). Required. Must be unique.
-        department: Department name (e.g. 'Engineering', 'IT', 'Finance', 'HR', 'Sales').
-                    Required.
-        role:       Job title / role (e.g. 'Software Engineer'). Defaults to 'Employee'.
+        name:        Full name of the new employee (e.g. 'Ajay Kumar'). Required.
+        email:       Work email address (e.g. 'ajay@techcorp.com'). Required. Must be unique.
+        department:  Department name (e.g. 'Engineering', 'IT', 'Finance', 'HR', 'Sales').
+                     Required.
+        role:        Job title / role (e.g. 'Software Engineer'). Defaults to 'Employee'.
+        employee_id: Optional preferred Employee ID (e.g. 'EMP1025'). Used when the caller
+                     wants to preserve a specific ID (e.g. auto-registration during ticket
+                     creation). Falls back to auto-generation if already taken.
 
     Returns:
         A success message with the new Employee ID, or a descriptive error message.
@@ -117,8 +124,17 @@ def create_employee(
                 f"If you need to update existing employee details, please contact HR."
             )
 
-        # ── Generate next Employee ID ─────────────────────────────────────────
-        new_emp_id = _next_employee_id(cursor)
+        # ── Generate / resolve Employee ID ───────────────────────────────────────
+        new_emp_id = None
+        if employee_id:
+            preferred = employee_id.strip().upper()
+            if re.match(r"^EMP\d{4,}$", preferred):
+                cursor.execute("SELECT 1 FROM employees WHERE employee_id = ?", (preferred,))
+                if not cursor.fetchone():
+                    new_emp_id = preferred  # Preferred ID is available — use it
+        if new_emp_id is None:
+            new_emp_id = _next_employee_id(cursor)
+
         now = datetime.now().isoformat()
 
         # ── Insert record ─────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ from tools.knowledge_search import knowledge_search
 from tools.ticket_creation import ticket_creation
 from tools.ticket_lookup import ticket_lookup
 from tools.employee_registration import create_employee
+from data.init_db import get_db_connection
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -309,36 +310,96 @@ def ticket_lookup_node(state: AgentState) -> dict:
     return {"tool_output": result}
 
 
+def _employee_in_db(employee_id: str) -> bool:
+    """Return True if the employee_id exists in the employees table."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM employees WHERE employee_id = ?", (employee_id,))
+        exists = cursor.fetchone() is not None
+        conn.close()
+        return exists
+    except Exception as exc:
+        logger.warning("Could not check employee in DB: %s — allowing ticket creation", exc)
+        return True  # On DB error, don't block ticket creation
+
+
 def ticket_creation_node(state: AgentState) -> dict:
     """
     Orchestrates ticket creation with multi-step validation.
-    Collects missing info before creating the ticket.
+    If the employee ID is not found in the database, automatically triggers
+    an inline registration sub-flow before creating the ticket — providing
+    a seamless end-to-end experience.
     """
-    logger.info("Ticket creation node executing")
+    logger.info("Ticket creation node executing (awaiting_field=%s)", state.awaiting_field)
 
-    # Step 1: Need employee ID
-    if not state.employee_id:
-        response = AIMessage(content="I'd be happy to create a support ticket for you! First, I'll need your **employee ID** (e.g., EMP1024). What is your employee ID?")
-        return {
-            "messages": [response],
-            "awaiting_info": True,
-            "awaiting_field": "employee_id",
-            "intent": "ticket_creation",
-            "tool_output": None
-        }
-
-    # Step 2: Gather issue details
+    # ── Get the last user message ─────────────────────────────────────────────
     last_human_message = ""
     for msg in reversed(state.messages):
         if isinstance(msg, HumanMessage):
             last_human_message = msg.content
             break
 
-    # Build pending ticket if not exists
-    pending = state.pending_ticket or {}
+    # Work on a mutable copy of the pending ticket dict
+    pending = dict(state.pending_ticket) if state.pending_ticket else {}
+    field = state.awaiting_field
 
+    # ── Collect answers for the inline auto-registration sub-flow ─────────────
+    if field == "new_emp_name":
+        val = last_human_message.strip()
+        if len(val) >= 2:
+            pending.setdefault("emp_reg", {})["name"] = val
+        else:
+            return {
+                "messages": [AIMessage(content="Please enter a valid full name (at least 2 characters).")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_name",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
+    elif field == "new_emp_email":
+        val = last_human_message.strip()
+        if re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", val):
+            pending.setdefault("emp_reg", {})["email"] = val
+        else:
+            return {
+                "messages": [AIMessage(content=f"'{val}' doesn't look like a valid email. Please provide your work email (e.g. `name@techcorp.com`).")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_email",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
+    elif field == "new_emp_dept":
+        val = last_human_message.strip()
+        if len(val) >= 2:
+            pending.setdefault("emp_reg", {})["department"] = val
+        else:
+            return {
+                "messages": [AIMessage(content="Please provide your department name (e.g. Engineering, IT, Finance, HR, Sales).")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_dept",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
+    # ── Step 1: Need employee ID ──────────────────────────────────────────────
+    if not state.employee_id:
+        response = AIMessage(content="I'd be happy to create a support ticket for you! First, I'll need your **employee ID** (e.g., EMP1025). What is your employee ID?")
+        return {
+            "messages": [response],
+            "awaiting_info": True,
+            "awaiting_field": "employee_id",
+            "intent": "ticket_creation",
+            "tool_output": None,
+        }
+
+    # ── Step 2: Gather issue details ──────────────────────────────────────────
     if not pending.get("title") or not pending.get("description"):
-        # Use LLM to extract ticket details from conversation
         extract_prompt = f"""Extract IT support ticket information from this message: "{last_human_message}"
 
 Also considering recent conversation context.
@@ -370,7 +431,7 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
         except Exception as e:
             logger.error("Ticket info extraction error: %s", e)
 
-    # Step 3: Ask for missing description
+    # ── Step 3: Ask for missing description ───────────────────────────────────
     if not pending.get("description") or len(pending.get("description", "")) < 10:
         title_hint = f" regarding **{pending.get('title', 'your issue')}**" if pending.get("title") else ""
         response = AIMessage(content=f"To create a ticket{title_hint}, please describe the issue in more detail. What exactly is happening?")
@@ -380,10 +441,10 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
             "awaiting_info": True,
             "awaiting_field": "description",
             "intent": "ticket_creation",
-            "tool_output": None
+            "tool_output": None,
         }
 
-    # Step 4: Confirm before creating (if not already confirmed)
+    # ── Step 4: Confirm before creating ──────────────────────────────────────
     if not pending.get("confirmed"):
         pending["confirmed"] = True
         confirm_msg = (
@@ -393,33 +454,113 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
             f"🏷️ **Category:** {pending.get('category', 'Other')}\n"
             f"⚡ **Priority:** {pending.get('priority', 'Medium')}\n"
             f"📝 **Description:** {pending.get('description', 'N/A')}\n\n"
-            f"Shall I create this ticket? (Yes/No)"
+            f"Shall I create this ticket? (**Yes / No**)"
         )
-        response = AIMessage(content=confirm_msg)
         return {
-            "messages": [response],
+            "messages": [AIMessage(content=confirm_msg)],
             "pending_ticket": pending,
             "awaiting_info": True,
             "awaiting_field": "confirmation",
             "intent": "ticket_creation",
-            "tool_output": None
+            "tool_output": None,
         }
 
-    # Step 5: Create the ticket
+    # ── Step 4.5: Auto-register if employee not in DB ────────────────────────
+    #    Triggered after user confirms ticket details; transparently registers the
+    #    employee then continues straight to ticket creation.
+    if not _employee_in_db(state.employee_id):
+        reg = pending.get("emp_reg", {})
+
+        if not reg.get("name"):
+            response = AIMessage(content=(
+                f"I'd love to create that ticket for you, but **{state.employee_id}** "
+                f"isn't registered in the system yet.\n\n"
+                f"No worries — let me register you right now! It'll only take a moment.\n\n"
+                f"What is your **full name**?"
+            ))
+            return {
+                "messages": [response],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_name",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
+        if not reg.get("email"):
+            return {
+                "messages": [AIMessage(content=f"Thanks **{reg['name']}**! What is your **work email address**?")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_email",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
+        if not reg.get("department"):
+            return {
+                "messages": [AIMessage(content=f"Almost done! Which **department** are you in?\n*(e.g. Engineering, IT, Finance, HR, Sales)*")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_dept",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
+        # All info collected — auto-register, preserving the provided employee_id
+        logger.info("Auto-registering %s (%s) before ticket creation", state.employee_id, reg.get("name"))
+        try:
+            reg_result = create_employee.invoke({
+                "name": reg["name"],
+                "email": reg["email"],
+                "department": reg["department"],
+                "employee_id": state.employee_id,
+            })
+        except Exception as exc:
+            logger.error("Auto-registration error: %s", exc)
+            reg_result = "❌ Registration failed"
+
+        if "❌" in reg_result:
+            # Surface the registration error and abort ticket creation
+            return {
+                "tool_output": reg_result + "\n\n⚠️ Ticket creation was not completed due to the registration issue above.",
+                "pending_ticket": None,
+                "awaiting_info": False,
+                "awaiting_field": None,
+            }
+
+        logger.info("Auto-registration succeeded for %s", state.employee_id)
+        pending["auto_reg_result"] = reg_result  # Carry result into final response
+
+    # ── Step 5: Create the ticket ─────────────────────────────────────────────
     try:
         result = ticket_creation.invoke({
             "employee_id": state.employee_id,
             "title": pending.get("title", "IT Support Request"),
             "description": pending.get("description", ""),
             "category": pending.get("category", "Other"),
-            "priority": pending.get("priority", "Medium")
+            "priority": pending.get("priority", "Medium"),
         })
         logger.info("Ticket creation completed for: %s", state.employee_id)
+
+        # Prepend auto-registration success note if applicable
+        if pending.get("auto_reg_result"):
+            result = (
+                f"✅ **Employee Registered & Ticket Created**\n\n"
+                f"**Registration:**\n{pending['auto_reg_result']}\n\n"
+                f"---\n\n"
+                f"**Ticket:**\n{result}"
+            )
     except Exception as e:
         logger.error("Ticket creation tool error: %s", e)
         result = "❌ Error: Failed to create ticket. Please try again or contact IT helpdesk."
 
-    return {"tool_output": result, "pending_ticket": None, "awaiting_info": False, "awaiting_field": None}
+    return {
+        "tool_output": result,
+        "pending_ticket": None,
+        "awaiting_info": False,
+        "awaiting_field": None,
+    }
 
 
 def response_node(state: AgentState) -> dict:
