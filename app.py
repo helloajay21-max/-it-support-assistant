@@ -170,6 +170,7 @@ def run_agent(user_input: str) -> Optional[str]:
             "employee_name": prior.employee_name,
             "intent": prior.intent,
             "pending_ticket": prior.pending_ticket,
+            "pending_employee": prior.pending_employee,
             "awaiting_info": prior.awaiting_info,
             "awaiting_field": prior.awaiting_field,
             "tool_output": None,
@@ -197,6 +198,7 @@ def run_agent(user_input: str) -> Optional[str]:
                     "knowledge_search": "🔍 Knowledge Base Search",
                     "ticket_lookup": "🎫 Ticket Lookup",
                     "ticket_creation": "📝 Ticket Creation",
+                    "employee_registration": "👤 Employee Registration",
                 }
                 tool_label = tool_map.get(intent, intent)
                 st.session_state.tool_calls_log.append({
@@ -283,6 +285,7 @@ def render_sidebar():
             ("🔍", "Knowledge Search", "How-to guides & troubleshooting"),
             ("🎫", "Ticket Lookup", "Check existing ticket status"),
             ("📝", "Ticket Creation", "Raise a new support ticket"),
+            ("👤", "Employee Registration", "Onboard a new employee"),
         ]
         for icon, name, desc in tools_info:
             st.markdown(f"**{icon} {name}**  \n{desc}")
@@ -297,6 +300,7 @@ def render_sidebar():
             "My laptop is very slow. Please raise a ticket.",
             "How do I set up MFA?",
             "I can't access the CRM system.",
+            "Register a new employee",
         ]
         for prompt in quick_prompts:
             if st.button(prompt, key=f"qp_{prompt[:20]}", use_container_width=True):
@@ -338,11 +342,13 @@ def render_main():
             - 🔍 **Troubleshooting** — Step-by-step guides for common IT issues
             - 🎫 **Ticket Status** — Check your existing support tickets
             - 📝 **Raise a Ticket** — Create a new IT support request
+            - 👤 **Employee Registration** — Onboard a new employee into the system
 
             **Try asking:**
             - *"How do I reset my VPN password?"*
             - *"Check tickets for EMP1024"*
             - *"My laptop won't turn on, please raise a ticket"*
+            - *"Register a new employee: Ajay Kumar, ajay@techcorp.com, IT department"*
             """)
         else:
             for msg in st.session_state.messages:

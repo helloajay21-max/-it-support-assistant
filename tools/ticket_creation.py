@@ -3,7 +3,6 @@ Tool 3: Ticket Creation
 Creates new IT support tickets in the local SQLite database with validation.
 """
 
-import json
 import os
 import re
 import sys
@@ -18,8 +17,6 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-EMPLOYEES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "employees.json")
-
 VALID_CATEGORIES = {
     "VPN", "Laptop", "Email", "Software", "Hardware",
     "Network", "Password", "Access", "Printer", "MFA",
@@ -30,13 +27,16 @@ VALID_PRIORITIES = {"Low", "Medium", "High", "Critical"}
 
 
 def _load_employees() -> dict:
-    """Load employees indexed by employee_id."""
+    """Load employees indexed by employee_id from the database."""
     try:
-        with open(EMPLOYEES_PATH, "r", encoding="utf-8") as f:
-            employees = json.load(f)
-        return {emp["employee_id"]: emp for emp in employees}
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.error("Failed to load employees: %s", e)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM employees WHERE status = 'Active'")
+        rows = cursor.fetchall()
+        conn.close()
+        return {row["employee_id"]: dict(row) for row in rows}
+    except Exception as e:
+        logger.error("Failed to load employees from DB: %s", e)
         return {}
 
 

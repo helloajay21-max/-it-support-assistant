@@ -1,6 +1,6 @@
 """
 Database initialization script for IT Support Assistant.
-Creates and seeds the SQLite database with sample tickets.
+Creates and seeds the SQLite database with sample tickets and employees.
 """
 
 import sqlite3
@@ -9,7 +9,13 @@ import os
 from datetime import datetime, timedelta
 import random
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "tickets.db")
+# Respect SQLITE_DB_PATH env var so Azure persistent storage works correctly
+DB_PATH = os.environ.get(
+    "SQLITE_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "tickets.db")
+)
+
+EMPLOYEES_JSON = os.path.join(os.path.dirname(__file__), "employees.json")
 
 
 def init_db():
@@ -17,6 +23,43 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
+    # ── Employees table ────────────────────────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS employees (
+            employee_id  TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            email        TEXT NOT NULL UNIQUE,
+            department   TEXT NOT NULL,
+            role         TEXT NOT NULL DEFAULT 'Employee',
+            status       TEXT NOT NULL DEFAULT 'Active',
+            created_at   TEXT NOT NULL
+        )
+    """)
+
+    # Seed employees from JSON if the table is empty
+    cursor.execute("SELECT COUNT(*) FROM employees")
+    if cursor.fetchone()[0] == 0:
+        try:
+            with open(EMPLOYEES_JSON, "r", encoding="utf-8") as f:
+                employees = json.load(f)
+            seed_ts = datetime.now().isoformat()
+            for emp in employees:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO employees
+                    (employee_id, name, email, department, role, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'Active', ?)
+                """, (
+                    emp["employee_id"],
+                    emp["name"],
+                    emp["email"],
+                    emp["department"],
+                    emp.get("role", "Employee"),
+                    seed_ts,
+                ))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            print(f"Warning: could not seed employees from JSON: {exc}")
+
+    # ── Tickets table ──────────────────────────────────────────────────────────
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             ticket_id TEXT PRIMARY KEY,

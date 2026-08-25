@@ -27,6 +27,9 @@ class AgentState(BaseModel):
     # Pending ticket data being collected for ticket creation
     pending_ticket: Optional[dict] = None
 
+    # Pending employee data being collected for employee registration
+    pending_employee: Optional[dict] = None
+
     # Whether we're in multi-turn info collection mode
     awaiting_info: bool = False
 

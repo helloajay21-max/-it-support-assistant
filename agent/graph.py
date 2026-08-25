@@ -11,6 +11,7 @@ from agent.nodes import (
     response_node,
     ticket_creation_node,
     ticket_lookup_node,
+    employee_registration_node,
 )
 from agent.state import AgentState
 from utils.logger import get_logger
@@ -23,17 +24,19 @@ logger = get_logger(__name__)
 def route_from_intent(state: AgentState) -> str:
     """
     Combined router from intent_node.
-    - If a previous turn left us awaiting user input, the tool node
-      will handle the continuation (based on stored intent in state).
+    - If a previous turn left us awaiting user input, re-route to the correct tool
+      node based on the stored intent (intent_node preserved it when awaiting_info).
     - Otherwise route by detected intent.
     """
-    # If we are mid-conversation collecting info, re-route to the correct tool
+    # Mid-conversation info collection: route to the correct tool
     if state.awaiting_info and state.awaiting_field:
         intent = state.intent or "general"
         if intent == "ticket_lookup":
             return "ticket_lookup_node"
         if intent == "ticket_creation":
             return "ticket_creation_node"
+        if intent == "employee_registration":
+            return "employee_registration_node"
 
     intent = state.intent or "general"
     if intent == "knowledge_search":
@@ -42,6 +45,8 @@ def route_from_intent(state: AgentState) -> str:
         return "ticket_lookup_node"
     if intent == "ticket_creation":
         return "ticket_creation_node"
+    if intent == "employee_registration":
+        return "employee_registration_node"
     return "response_node"
 
 
@@ -87,6 +92,7 @@ def build_graph():
     workflow.add_node("knowledge_search_node", knowledge_search_node)
     workflow.add_node("ticket_lookup_node", ticket_lookup_node)
     workflow.add_node("ticket_creation_node", ticket_creation_node)
+    workflow.add_node("employee_registration_node", employee_registration_node)
     workflow.add_node("response_node", response_node)
 
     # ── Entry point ──────────────────────────────────────
@@ -100,12 +106,18 @@ def build_graph():
             "knowledge_search_node": "knowledge_search_node",
             "ticket_lookup_node": "ticket_lookup_node",
             "ticket_creation_node": "ticket_creation_node",
+            "employee_registration_node": "employee_registration_node",
             "response_node": "response_node",
         }
     )
 
     # ── Tool → response / END routing ────────────────────
-    for tool_node in ("knowledge_search_node", "ticket_lookup_node", "ticket_creation_node"):
+    for tool_node in (
+        "knowledge_search_node",
+        "ticket_lookup_node",
+        "ticket_creation_node",
+        "employee_registration_node",
+    ):
         workflow.add_conditional_edges(
             tool_node,
             route_after_tool,

@@ -15,6 +15,7 @@ from agent.state import AgentState
 from tools.knowledge_search import knowledge_search
 from tools.ticket_creation import ticket_creation
 from tools.ticket_lookup import ticket_lookup
+from tools.employee_registration import create_employee
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -69,6 +70,7 @@ Your capabilities:
 1. **Knowledge Search** – Answer how-to questions and provide troubleshooting guidance from the IT knowledge base.
 2. **Ticket Lookup** – Check the status of existing IT support tickets.
 3. **Ticket Creation** – Create new IT support tickets.
+4. **Employee Registration** – Register a new employee so they can access IT services and raise tickets.
 
 Guidelines:
 - Be professional, friendly, and concise.
@@ -77,6 +79,7 @@ Guidelines:
 - Do NOT invent ticket IDs, employee info, or system status.
 - If you lack information, ask the user clearly.
 - For ticket creation, always confirm details with the user before creating.
+- For employee registration, collect name, email, and department before confirming.
 - Distinguish clearly between retrieved data and your own suggestions.
 - Handle errors gracefully and provide helpful alternatives.
 
@@ -84,6 +87,7 @@ When detecting intent, classify as:
 - knowledge_search: user asks how to do something, wants troubleshooting help, or asks about IT policies
 - ticket_lookup: user wants to check ticket status or view their tickets
 - ticket_creation: user wants to raise/create/log a new support ticket
+- employee_registration: user wants to register/onboard/add a new employee to the system
 - general: general greeting, thank you, or out-of-scope question
 """
 
@@ -96,6 +100,8 @@ def intent_node(state: AgentState) -> dict:
     """
     Analyzes the latest user message and determines intent.
     Also extracts employee ID if present in the message.
+    When mid-conversation info collection is in progress, the existing intent
+    is preserved so routing stays on the correct tool node.
     """
     logger.info("Intent node executing")
 
@@ -116,6 +122,21 @@ def intent_node(state: AgentState) -> dict:
             employee_id = match.group(0).upper()
             logger.info("Extracted employee ID from message: %s", employee_id)
 
+    # ── Preserve intent during multi-turn info collection ─────────────────────
+    # When we are mid-flow (awaiting_info=True), the user's short answer
+    # (e.g. "John Doe", "IT") would be mis-classified as "general" by the LLM.
+    # Returning only turn_count (and any extracted employee_id) keeps the stored
+    # intent intact so the router can continue the current workflow.
+    if state.awaiting_info and state.awaiting_field:
+        logger.info(
+            "Mid-collection flow detected (field=%s, intent=%s) — preserving intent",
+            state.awaiting_field, state.intent
+        )
+        updates: dict = {"turn_count": state.turn_count + 1}
+        if employee_id:
+            updates["employee_id"] = employee_id
+        return updates
+
     # Build context for intent detection
     recent_messages = state.messages[-6:]  # Last 3 turns
     intent_prompt = f"""Analyze this IT support request and classify the intent.
@@ -129,6 +150,7 @@ Classify the intent as exactly ONE of:
 - knowledge_search: user wants IT help/instructions/troubleshooting
 - ticket_lookup: user wants to check ticket status
 - ticket_creation: user wants to create/raise a new ticket
+- employee_registration: user wants to register/onboard/add a new employee
 - general: greeting, thanks, or unrelated to IT support
 
 Also extract if mentioned:
@@ -455,3 +477,185 @@ Instructions:
         "messages": [AIMessage(content=final_response)],
         "tool_output": None
     }
+
+
+# ── Employee Registration Node ────────────────────────────────────────────────
+
+def employee_registration_node(state: AgentState) -> dict:
+    """
+    Orchestrates new employee registration with step-by-step validation.
+
+    Collection order:
+      1. name  → 2. email  → 3. department  → 4. role (optional / defaults)
+      → 5. confirm  → 6. create via create_employee tool
+    """
+    logger.info("Employee registration node executing (awaiting_field=%s)", state.awaiting_field)
+
+    last_human_message = ""
+    for msg in reversed(state.messages):
+        if isinstance(msg, HumanMessage):
+            last_human_message = msg.content
+            break
+
+    pending = dict(state.pending_employee) if state.pending_employee else {}
+
+    # ── Collect answers from previous questions ────────────────────────────────
+    field = state.awaiting_field
+
+    if field == "emp_name":
+        name_val = last_human_message.strip()
+        if len(name_val) >= 2:
+            pending["name"] = name_val
+        else:
+            return {
+                "messages": [AIMessage(content="Please provide a valid full name (at least 2 characters).")],
+                "pending_employee": pending,
+                "awaiting_info": True,
+                "awaiting_field": "emp_name",
+                "intent": "employee_registration",
+            }
+
+    elif field == "emp_email":
+        import re as _re
+        email_val = last_human_message.strip()
+        if _re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", email_val):
+            pending["email"] = email_val
+        else:
+            return {
+                "messages": [AIMessage(content=f"'{email_val}' doesn't look like a valid email. Please provide a valid work email address (e.g. `john.doe@techcorp.com`).")],
+                "pending_employee": pending,
+                "awaiting_info": True,
+                "awaiting_field": "emp_email",
+                "intent": "employee_registration",
+            }
+
+    elif field == "emp_department":
+        dept_val = last_human_message.strip()
+        if len(dept_val) >= 2:
+            pending["department"] = dept_val
+        else:
+            return {
+                "messages": [AIMessage(content="Please provide the department name (e.g. Engineering, IT, Finance, HR, Sales).")],
+                "pending_employee": pending,
+                "awaiting_info": True,
+                "awaiting_field": "emp_department",
+                "intent": "employee_registration",
+            }
+
+    elif field == "emp_role":
+        role_val = last_human_message.strip()
+        pending["role"] = role_val if role_val else "Employee"
+
+    elif field == "emp_confirmation":
+        affirmative = any(
+            w in last_human_message.lower()
+            for w in ["yes", "y", "confirm", "sure", "ok", "proceed", "register", "go ahead", "correct"]
+        )
+        if not affirmative:
+            response = AIMessage(content="Understood — employee registration has been cancelled. Is there anything else I can help you with?")
+            return {
+                "messages": [response],
+                "pending_employee": None,
+                "awaiting_info": False,
+                "awaiting_field": None,
+                "intent": "general",
+            }
+        pending["confirmed"] = True
+
+    # ── Try to extract fields from the original message if not yet collected ──
+    if not pending.get("name") and field not in ("emp_name",):
+        # Try LLM extraction from the initial message
+        try:
+            extract_prompt = (
+                f'Extract employee registration details from: "{last_human_message}"\n'
+                'Return JSON only: {"name": "...", "email": "...", "department": "...", "role": "..."}\n'
+                'Set null for any field not clearly mentioned.'
+            )
+            resp = get_llm().invoke([HumanMessage(content=extract_prompt)])
+            raw = resp.content.strip()
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if m:
+                extracted = json.loads(m.group(0))
+                for key in ("name", "email", "department", "role"):
+                    if extracted.get(key) and not pending.get(key):
+                        pending[key] = extracted[key]
+        except Exception as exc:
+            logger.warning("Could not extract employee details from message: %s", exc)
+
+    # ── Step through collection ────────────────────────────────────────────────
+    if not pending.get("name"):
+        response = AIMessage(content="I'd be happy to register a new employee! Let's start with the basics.\n\nWhat is the **full name** of the new employee?")
+        return {
+            "messages": [response],
+            "pending_employee": pending,
+            "awaiting_info": True,
+            "awaiting_field": "emp_name",
+            "intent": "employee_registration",
+            "tool_output": None,
+        }
+
+    if not pending.get("email"):
+        response = AIMessage(content=f"Got it — **{pending['name']}**.\n\nWhat is their **work email address**?")
+        return {
+            "messages": [response],
+            "pending_employee": pending,
+            "awaiting_info": True,
+            "awaiting_field": "emp_email",
+            "intent": "employee_registration",
+            "tool_output": None,
+        }
+
+    if not pending.get("department"):
+        response = AIMessage(content=f"Thanks! Which **department** will **{pending['name']}** be joining?\n*(e.g. Engineering, IT, Finance, HR, Sales, Marketing, Operations)*")
+        return {
+            "messages": [response],
+            "pending_employee": pending,
+            "awaiting_info": True,
+            "awaiting_field": "emp_department",
+            "intent": "employee_registration",
+            "tool_output": None,
+        }
+
+    # Role is optional — default to "Employee" if not yet set
+    if "role" not in pending:
+        pending["role"] = "Employee"
+
+    # ── Confirmation step ─────────────────────────────────────────────────────
+    if not pending.get("confirmed"):
+        confirm_msg = (
+            f"Please confirm the details for the new employee:\n\n"
+            f"  👤 **Name**        : {pending.get('name')}\n"
+            f"  📧 **Email**       : {pending.get('email')}\n"
+            f"  🏢 **Department**  : {pending.get('department')}\n"
+            f"  💼 **Role**        : {pending.get('role', 'Employee')}\n\n"
+            f"Shall I register this employee? (**Yes / No**)"
+        )
+        return {
+            "messages": [AIMessage(content=confirm_msg)],
+            "pending_employee": pending,
+            "awaiting_info": True,
+            "awaiting_field": "emp_confirmation",
+            "intent": "employee_registration",
+            "tool_output": None,
+        }
+
+    # ── Execute registration ───────────────────────────────────────────────────
+    try:
+        result = create_employee.invoke({
+            "name": pending.get("name", ""),
+            "email": pending.get("email", ""),
+            "department": pending.get("department", ""),
+            "role": pending.get("role", "Employee"),
+        })
+        logger.info("Employee registration completed: %s", pending.get("name"))
+    except Exception as exc:
+        logger.error("create_employee tool error: %s", exc)
+        result = "❌ Error: Failed to register employee. Please try again or contact the system administrator."
+
+    return {
+        "tool_output": result,
+        "pending_employee": None,
+        "awaiting_info": False,
+        "awaiting_field": None,
+    }
+
