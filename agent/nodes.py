@@ -256,7 +256,9 @@ def collect_info_node(state: AgentState) -> dict:
 
 def knowledge_search_node(state: AgentState) -> dict:
     """
-    Executes the knowledge search tool with the user's query.
+    Executes knowledge search with issue-triage state handling.
+    For issue statements (e.g., "I have a VPN issue"), we collect employee ID,
+    then offer ticket lookup before giving KB troubleshooting.
     """
     logger.info("Knowledge search node executing")
 
@@ -265,6 +267,128 @@ def knowledge_search_node(state: AgentState) -> dict:
         if isinstance(msg, HumanMessage):
             last_human_message = msg.content
             break
+
+    pending_triage = dict(state.pending_triage) if state.pending_triage else {}
+    lowered = last_human_message.lower()
+
+    # Heuristic: this is an issue report (not a pure "how to ..." request)
+    issue_report = any(k in lowered for k in [
+        "issue", "problem", "not working", "can't", "cannot", "error", "failing", "slow", "hanging"
+    ])
+    vpn_related = "vpn" in lowered
+    likely_troubleshooting_flow = issue_report and vpn_related
+
+    # Step A: handle follow-up after asking employee ID
+    if state.awaiting_field == "triage_employee_id":
+        if not state.employee_id:
+            return {
+                "messages": [AIMessage(content="Please provide a valid employee ID in format **EMP####** (e.g., EMP1024).")],
+                "awaiting_info": True,
+                "awaiting_field": "triage_employee_id",
+                "intent": "knowledge_search",
+                "pending_triage": pending_triage,
+                "tool_output": None,
+            }
+
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM employees WHERE employee_id = ?", (state.employee_id,))
+            row = cursor.fetchone()
+            conn.close()
+        except Exception:
+            row = None
+
+        if row:
+            emp_name = row["name"]
+            return {
+                "messages": [AIMessage(content=(
+                    f"I found your profile, **{emp_name} ({state.employee_id})**. "
+                    f"Would you like me to check your existing tickets first? (**Yes / No**)"
+                ))],
+                "employee_name": emp_name,
+                "awaiting_info": True,
+                "awaiting_field": "triage_ticket_check",
+                "intent": "knowledge_search",
+                "pending_triage": pending_triage,
+                "tool_output": None,
+            }
+
+        # Employee not found: continue with KB guidance but mention registration path
+        pending_triage["employee_id"] = state.employee_id
+        return {
+            "messages": [AIMessage(content=(
+                f"I couldn’t find **{state.employee_id}** in the employee database yet. "
+                f"I can still help troubleshoot the VPN issue now, and we can register this employee if needed."
+            ))],
+            "awaiting_info": False,
+            "awaiting_field": None,
+            "intent": "knowledge_search",
+            "pending_triage": pending_triage,
+            "tool_output": None,
+        }
+
+    # Step B: after asking "check existing tickets?"
+    if state.awaiting_field == "triage_ticket_check":
+        affirmative = any(w in lowered for w in ["yes", "y", "check", "sure", "ok", "proceed"])
+        query_for_kb = pending_triage.get("issue_query", last_human_message)
+
+        if affirmative and state.employee_id:
+            try:
+                lookup_result = ticket_lookup.invoke({"employee_id": state.employee_id})
+            except Exception as e:
+                logger.error("Triage ticket lookup error: %s", e)
+                lookup_result = "Error: Could not check existing tickets right now."
+
+            return {
+                "tool_output": lookup_result,
+                "intent": "ticket_lookup",  # preserve raw lookup formatting path
+                "awaiting_info": False,
+                "awaiting_field": None,
+                "pending_triage": None,
+            }
+
+        # User said no -> proceed to KB troubleshooting for the original issue query
+        try:
+            kb_result = knowledge_search.invoke({"query": query_for_kb})
+        except Exception as e:
+            logger.error("Knowledge search tool error after triage opt-out: %s", e)
+            kb_result = "Error: Knowledge search tool encountered an issue. Please try again."
+        return {
+            "tool_output": kb_result,
+            "intent": "knowledge_search",
+            "awaiting_info": False,
+            "awaiting_field": None,
+            "pending_triage": None,
+        }
+
+    # Step C: start triage flow for issue statement
+    if likely_troubleshooting_flow and not state.employee_id:
+        return {
+            "messages": [AIMessage(content=(
+                "I can help with your VPN issue. First, what is your **employee ID** "
+                "(e.g., EMP1024)?"
+            ))],
+            "awaiting_info": True,
+            "awaiting_field": "triage_employee_id",
+            "intent": "knowledge_search",
+            "pending_triage": {"issue_query": last_human_message, "topic": "vpn"},
+            "tool_output": None,
+        }
+
+    # Step D: if employee ID already known, offer ticket check first
+    if likely_troubleshooting_flow and state.employee_id:
+        return {
+            "messages": [AIMessage(content=(
+                f"I can help with your VPN issue. Would you like me to first check existing "
+                f"tickets for **{state.employee_id}**? (**Yes / No**)"
+            ))],
+            "awaiting_info": True,
+            "awaiting_field": "triage_ticket_check",
+            "intent": "knowledge_search",
+            "pending_triage": {"issue_query": last_human_message, "topic": "vpn"},
+            "tool_output": None,
+        }
 
     try:
         result = knowledge_search.invoke({"query": last_human_message})

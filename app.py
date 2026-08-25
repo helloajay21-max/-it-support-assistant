@@ -172,6 +172,7 @@ def run_agent(user_input: str, forced_employee_id: Optional[str] = None) -> Opti
             "pending_ticket": prior.pending_ticket,
             "pending_employee": prior.pending_employee,
             "pending_delete": prior.pending_delete,
+            "pending_triage": prior.pending_triage,
             "awaiting_info": prior.awaiting_info,
             "awaiting_field": prior.awaiting_field,
             "tool_output": None,
@@ -297,6 +298,8 @@ def render_sidebar():
                 "delete_employee_id": "Employee ID to delete",
                 "delete_mode": "Delete mode (deactivate / hard delete)",
                 "delete_confirmation": "Deletion confirmation (Yes/No)",
+                "triage_employee_id": "Employee ID",
+                "triage_ticket_check": "Check existing tickets? (Yes/No)",
             }
             friendly = field_labels.get(agent_state.awaiting_field, agent_state.awaiting_field)
             st.warning(f"⏳ Awaiting: **{friendly}**")

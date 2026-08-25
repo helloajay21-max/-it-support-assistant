@@ -33,6 +33,9 @@ class AgentState(BaseModel):
     # Pending employee deletion flow data
     pending_delete: Optional[dict] = None
 
+    # Pending issue triage state (e.g. VPN issue -> ask employee ID -> ask to check tickets)
+    pending_triage: Optional[dict] = None
+
     # Whether we're in multi-turn info collection mode
     awaiting_info: bool = False
 
