@@ -375,6 +375,7 @@ def render_sidebar():
                 "emp_name":       "Employee name",
                 "emp_email":      "Employee email",
                 "emp_department": "Department",
+                "emp_manager": "Manager name",
                 "emp_role":       "Role / Job title",
                 "emp_confirmation": "Confirmation (Yes/No)",
                 "delete_employee_id": "Employee ID to delete",
@@ -382,6 +383,7 @@ def render_sidebar():
                 "delete_confirmation": "Deletion confirmation (Yes/No)",
                 "triage_employee_id": "Employee ID",
                 "triage_ticket_check": "Check existing tickets? (Yes/No)",
+                "new_emp_manager": "Manager name",
             }
             friendly = field_labels.get(agent_state.awaiting_field, agent_state.awaiting_field)
             st.warning(f"⏳ Awaiting: **{friendly}**")
@@ -553,7 +555,7 @@ def render_main():
             - *"How do I reset my VPN password?"*
             - *"Check tickets for {AUTHOR_EMP_ID}"*
             - *"My laptop won't turn on, please raise a ticket"*
-            - *"Register a new employee: Jane Smith, jane@techcorp.com, Engineering"*
+            - *"Register a new employee: Jane Smith, jane@techcorp.com, Engineering, Carol Davis"*
             - *"Delete employee EMP1025 (deactivate)"*
             """)
         else:

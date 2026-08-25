@@ -96,7 +96,7 @@ Guidelines:
 - Do NOT invent ticket IDs, employee info, or system status.
 - If you lack information, ask the user clearly.
 - For ticket creation, always confirm details with the user before creating.
-- For employee registration, collect name, email, and department before confirming.
+- For employee registration, collect name, email, department, and manager name before confirming.
 - For employee deletion, always confirm scope (deactivate vs hard delete).
 - Distinguish clearly between retrieved data and your own suggestions.
 - Handle errors gracefully and provide helpful alternatives.
@@ -502,8 +502,8 @@ def ticket_creation_node(state: AgentState) -> dict:
                     "messages": [AIMessage(content=(
                         "Understood — ticket creation has been cancelled.\n\n"
                         "Let's register a new employee first. Please share details in this format:\n"
-                        "**Name, Email, Department**\n\n"
-                        "Example: `Ajay Sinha, ajay.sinha@techcorp.com, HR`"
+                        "**Name, Email, Department, Manager Name**\n\n"
+                        "Example: `Ajay Sinha, ajay.sinha@techcorp.com, HR, Carol Davis`"
                     ))],
                     "pending_ticket": None,
                     "pending_employee": {},
@@ -574,6 +574,20 @@ def ticket_creation_node(state: AgentState) -> dict:
                 "tool_output": None,
             }
 
+    elif field == "new_emp_manager":
+        val = last_human_message.strip()
+        if len(val) >= 2:
+            pending.setdefault("emp_reg", {})["manager_name"] = val
+        else:
+            return {
+                "messages": [AIMessage(content="Please provide your manager's full name (e.g. Carol Davis).")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_manager",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
     # ── Step 1: Need employee ID ──────────────────────────────────────────────
     if not state.employee_id:
         lowered = last_human_message.lower()
@@ -582,8 +596,8 @@ def ticket_creation_node(state: AgentState) -> dict:
                 "messages": [AIMessage(content=(
                     "Sure — let's register the new employee first.\n\n"
                     "Please share details in this format:\n"
-                    "**Name, Email, Department**\n\n"
-                    "Example: `Ajay Sinha, ajay.sinha@techcorp.com, HR`"
+                    "**Name, Email, Department, Manager Name**\n\n"
+                    "Example: `Ajay Sinha, ajay.sinha@techcorp.com, HR, Carol Davis`"
                 ))],
                 "pending_ticket": None,
                 "pending_employee": {},
@@ -714,6 +728,16 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
                 "tool_output": None,
             }
 
+        if not reg.get("manager_name"):
+            return {
+                "messages": [AIMessage(content="Great. What is your **manager's full name**?")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "new_emp_manager",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
         # All info collected — auto-register, preserving the provided employee_id
         logger.info("Auto-registering %s (%s) before ticket creation", state.employee_id, reg.get("name"))
         try:
@@ -721,6 +745,7 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
                 "name": reg["name"],
                 "email": reg["email"],
                 "department": reg["department"],
+                "manager_name": reg["manager_name"],
                 "employee_id": state.employee_id,
             })
         except Exception as exc:
@@ -945,8 +970,8 @@ def employee_registration_node(state: AgentState) -> dict:
     Orchestrates new employee registration with step-by-step validation.
 
     Collection order:
-      1. name  → 2. email  → 3. department  → 4. role (optional / defaults)
-      → 5. confirm  → 6. create via create_employee tool
+      1. name  → 2. email  → 3. department → 4. manager_name → 5. role (optional / defaults)
+      → 6. confirm  → 7. create via create_employee tool
     """
     logger.info("Employee registration node executing (awaiting_field=%s)", state.awaiting_field)
 
@@ -964,14 +989,16 @@ def employee_registration_node(state: AgentState) -> dict:
     if field == "emp_name":
         name_val = last_human_message.strip()
 
-        # Support one-line input: "Name, Email, Department[, Role]"
+        # Support one-line input: "Name, Email, Department, Manager[, Role]"
         parts = [p.strip() for p in name_val.split(",")]
         if len(parts) >= 3 and re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", parts[1]):
             pending["name"] = parts[0]
             pending["email"] = parts[1]
             pending["department"] = parts[2]
             if len(parts) >= 4 and parts[3]:
-                pending["role"] = parts[3]
+                pending["manager_name"] = parts[3]
+            if len(parts) >= 5 and parts[4]:
+                pending["role"] = parts[4]
         elif len(name_val) >= 2:
             pending["name"] = name_val
         else:
@@ -1010,6 +1037,19 @@ def employee_registration_node(state: AgentState) -> dict:
                 "intent": "employee_registration",
             }
 
+    elif field == "emp_manager":
+        manager_val = last_human_message.strip()
+        if len(manager_val) >= 2:
+            pending["manager_name"] = manager_val
+        else:
+            return {
+                "messages": [AIMessage(content="Please provide the reporting manager's full name (e.g. Carol Davis).")],
+                "pending_employee": pending,
+                "awaiting_info": True,
+                "awaiting_field": "emp_manager",
+                "intent": "employee_registration",
+            }
+
     elif field == "emp_role":
         role_val = last_human_message.strip()
         pending["role"] = role_val if role_val else "Employee"
@@ -1033,7 +1073,7 @@ def employee_registration_node(state: AgentState) -> dict:
         try:
             extract_prompt = (
                 f'Extract employee registration details from: "{last_human_message}"\n'
-                'Return JSON only: {"name": "...", "email": "...", "department": "...", "role": "..."}\n'
+                'Return JSON only: {"name": "...", "email": "...", "department": "...", "manager_name": "...", "role": "..."}\n'
                 'Set null for any field not clearly mentioned.'
             )
             resp = get_llm().invoke([HumanMessage(content=extract_prompt)])
@@ -1041,7 +1081,7 @@ def employee_registration_node(state: AgentState) -> dict:
             m = re.search(r"\{.*\}", raw, re.DOTALL)
             if m:
                 extracted = json.loads(m.group(0))
-                for key in ("name", "email", "department", "role"):
+                for key in ("name", "email", "department", "manager_name", "role"):
                     if extracted.get(key) and not pending.get(key):
                         pending[key] = extracted[key]
         except Exception as exc:
@@ -1081,6 +1121,17 @@ def employee_registration_node(state: AgentState) -> dict:
             "tool_output": None,
         }
 
+    if not pending.get("manager_name"):
+        response = AIMessage(content=f"Who will be the **reporting manager** for **{pending['name']}**?")
+        return {
+            "messages": [response],
+            "pending_employee": pending,
+            "awaiting_info": True,
+            "awaiting_field": "emp_manager",
+            "intent": "employee_registration",
+            "tool_output": None,
+        }
+
     # Role is optional — default to "Employee" if not yet set
     if "role" not in pending:
         pending["role"] = "Employee"
@@ -1092,6 +1143,7 @@ def employee_registration_node(state: AgentState) -> dict:
             f"  👤 **Name**        : {pending.get('name')}\n"
             f"  📧 **Email**       : {pending.get('email')}\n"
             f"  🏢 **Department**  : {pending.get('department')}\n"
+            f"  👔 **Manager**     : {pending.get('manager_name')}\n"
             f"  💼 **Role**        : {pending.get('role', 'Employee')}\n\n"
             f"Shall I register this employee? (**Yes / No**)"
         )
@@ -1110,6 +1162,7 @@ def employee_registration_node(state: AgentState) -> dict:
             "name": pending.get("name", ""),
             "email": pending.get("email", ""),
             "department": pending.get("department", ""),
+            "manager_name": pending.get("manager_name", "N/A"),
             "role": pending.get("role", "Employee"),
         })
         logger.info("Employee registration completed: %s", pending.get("name"))

@@ -49,6 +49,7 @@ def create_employee(
     name: str,
     email: str,
     department: str,
+    manager_name: str,
     role: str = "Employee",
     employee_id: Optional[str] = None,
 ) -> str:
@@ -58,7 +59,7 @@ def create_employee(
     raise tickets and access IT services.
 
     The tool:
-    1. Validates all required fields (name, email, department).
+    1. Validates all required fields (name, email, department, manager_name).
     2. Checks that the email address is not already registered.
     3. Uses the preferred employee_id if provided and available, otherwise
        generates the next unique sequential Employee ID automatically.
@@ -70,6 +71,7 @@ def create_employee(
         email:       Work email address (e.g. 'ajay@techcorp.com'). Required. Must be unique.
         department:  Department name (e.g. 'Engineering', 'IT', 'Finance', 'HR', 'Sales').
                      Required.
+        manager_name: Reporting manager full name (e.g. 'Carol Davis'). Required.
         role:        Job title / role (e.g. 'Software Engineer'). Defaults to 'Employee'.
         employee_id: Optional preferred Employee ID (e.g. 'EMP1025'). Used when the caller
                      wants to preserve a specific ID (e.g. auto-registration during ticket
@@ -78,12 +80,13 @@ def create_employee(
     Returns:
         A success message with the new Employee ID, or a descriptive error message.
     """
-    logger.info("create_employee called — name=%s, email=%s, dept=%s", name, email, department)
+    logger.info("create_employee called — name=%s, email=%s, dept=%s, manager=%s", name, email, department, manager_name)
 
     # ── Field validation ───────────────────────────────────────────────────────
     name = (name or "").strip()
     email = (email or "").strip()
     department = (department or "").strip()
+    manager_name = (manager_name or "").strip()
     role = (role or "Employee").strip() or "Employee"
 
     errors = []
@@ -95,6 +98,8 @@ def create_employee(
         errors.append(f"**Email** '{email}' is not a valid email address.")
     if not department or len(department) < 2:
         errors.append("**Department** must be at least 2 characters.")
+    if not manager_name or len(manager_name) < 2:
+        errors.append("**Manager name** must be at least 2 characters.")
 
     if errors:
         return "❌ Validation failed:\n" + "\n".join(f"  • {e}" for e in errors)
@@ -139,9 +144,9 @@ def create_employee(
 
         # ── Insert record ─────────────────────────────────────────────────────
         cursor.execute("""
-            INSERT INTO employees (employee_id, name, email, department, role, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'Active', ?)
-        """, (new_emp_id, name, email, matched_dept, role, now))
+            INSERT INTO employees (employee_id, name, email, department, role, manager_name, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'Active', ?)
+        """, (new_emp_id, name, email, matched_dept, role, manager_name, now))
 
         conn.commit()
         conn.close()
@@ -154,6 +159,7 @@ def create_employee(
             f"  👤 Name         : {name}\n"
             f"  📧 Email        : {email}\n"
             f"  🏢 Department   : {matched_dept}\n"
+            f"  👔 Manager      : {manager_name}\n"
             f"  💼 Role         : {role}\n"
             f"  📌 Status       : Active\n"
             f"  📅 Created At   : {now[:10]}\n\n"
