@@ -6,6 +6,7 @@ Each node represents a processing step in the agent pipeline.
 import json
 import os
 import re
+from datetime import datetime, timedelta
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -74,6 +75,39 @@ def _is_negative(text: str) -> bool:
     lowered = (text or "").lower()
     phrases = ["no", "cancel", "stop", "don't", "do not", "not now", "abort"]
     return any(re.search(rf"\b{re.escape(p)}\b", lowered) for p in phrases)
+
+
+def _employee_profile(employee_id: str) -> dict:
+    """Fetch basic employee profile for contextual responses."""
+    if not employee_id:
+        return {}
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT employee_id, name, email, department, role, manager_name, status, created_at
+            FROM employees
+            WHERE employee_id = ?
+            """,
+            (employee_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else {}
+    except Exception:
+        return {}
+
+
+def _is_recent_employee(profile: dict, days: int = 7) -> bool:
+    """Return True if employee profile was created recently."""
+    if not profile or not profile.get("created_at"):
+        return False
+    try:
+        created_at = datetime.fromisoformat(str(profile["created_at"]))
+        return created_at >= datetime.now() - timedelta(days=days)
+    except Exception:
+        return False
 
 
 # ------------------------------------------------------------------
@@ -402,6 +436,55 @@ def knowledge_search_node(state: AgentState) -> dict:
             "intent": "knowledge_search",
             "pending_triage": {"issue_query": last_human_message, "topic": "vpn"},
             "tool_output": None,
+        }
+
+    # Step E: First-time VPN setup flow for new employees
+    first_time_words = ["first time", "new employee", "new joiner", "setup vpn", "set up vpn", "vpn setup", "initial setup"]
+    is_first_time_request = vpn_related and any(w in lowered for w in first_time_words)
+    profile = _employee_profile(state.employee_id) if state.employee_id else {}
+    is_recent_new_employee = vpn_related and state.employee_id and _is_recent_employee(profile, days=14)
+
+    if is_first_time_request or is_recent_new_employee:
+        if not state.employee_id:
+            return {
+                "messages": [AIMessage(content=(
+                    "I can help with first-time VPN onboarding. Please share your **employee ID** "
+                    "(e.g., EMP1024) so I can check your profile and guide the exact steps."
+                ))],
+                "awaiting_info": True,
+                "awaiting_field": "triage_employee_id",
+                "intent": "knowledge_search",
+                "pending_triage": {"issue_query": last_human_message, "topic": "vpn_onboarding"},
+                "tool_output": None,
+            }
+
+        emp_name = profile.get("name", state.employee_name or "Employee")
+        mgr = profile.get("manager_name", "your manager")
+        email = profile.get("email", "your registered work email")
+        onboarding_msg = (
+            f"🔐 **First-Time VPN Setup for {emp_name} ({state.employee_id})**\n\n"
+            f"Since this is first-time access, use **onboarding activation**, not password reset.\n\n"
+            f"1. **Manager approval check**\n"
+            f"   - Reporting manager on file: **{mgr}**\n"
+            f"2. **VPN access provisioning**\n"
+            f"   - IT creates your VPN profile and sends an activation email to **{email}**.\n"
+            f"3. **Temporary credentials (secure delivery)**\n"
+            f"   - For security, temporary VPN password is **not shown in chat**.\n"
+            f"   - It is sent via secure channel (activation link / onboarding mail).\n"
+            f"4. **Client setup**\n"
+            f"   - Install/open Cisco AnyConnect.\n"
+            f"   - Use your employee ID and temporary credentials.\n"
+            f"5. **First login completion**\n"
+            f"   - Set a new permanent password and reconnect.\n\n"
+            f"📌 If you did not receive activation credentials yet, say:\n"
+            f"**'Create VPN onboarding ticket for {state.employee_id}'** and I’ll raise it."
+        )
+        return {
+            "tool_output": onboarding_msg,
+            "intent": "knowledge_search",
+            "awaiting_info": False,
+            "awaiting_field": None,
+            "pending_triage": None,
         }
 
     try:
@@ -910,7 +993,7 @@ def response_node(state: AgentState) -> dict:
 
     # For operational tool outputs, preserve exact structured result from tools.
     # This avoids LLM rewording that can misreport create/delete outcomes.
-    if state.intent in {"ticket_lookup", "ticket_creation", "employee_registration", "employee_deletion"} and state.tool_output:
+    if state.intent in {"knowledge_search", "ticket_lookup", "ticket_creation", "employee_registration", "employee_deletion"} and state.tool_output:
         return {"messages": [AIMessage(content=state.tool_output)], "tool_output": None}
 
     # If no tool was called (general intent), generate direct response
