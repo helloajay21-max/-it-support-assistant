@@ -12,6 +12,7 @@ from agent.nodes import (
     ticket_creation_node,
     ticket_lookup_node,
     employee_registration_node,
+    employee_deletion_node,
 )
 from agent.state import AgentState
 from utils.logger import get_logger
@@ -37,6 +38,8 @@ def route_from_intent(state: AgentState) -> str:
             return "ticket_creation_node"
         if intent == "employee_registration":
             return "employee_registration_node"
+        if intent == "employee_deletion":
+            return "employee_deletion_node"
 
     intent = state.intent or "general"
     if intent == "knowledge_search":
@@ -47,6 +50,8 @@ def route_from_intent(state: AgentState) -> str:
         return "ticket_creation_node"
     if intent == "employee_registration":
         return "employee_registration_node"
+    if intent == "employee_deletion":
+        return "employee_deletion_node"
     return "response_node"
 
 
@@ -93,6 +98,7 @@ def build_graph():
     workflow.add_node("ticket_lookup_node", ticket_lookup_node)
     workflow.add_node("ticket_creation_node", ticket_creation_node)
     workflow.add_node("employee_registration_node", employee_registration_node)
+    workflow.add_node("employee_deletion_node", employee_deletion_node)
     workflow.add_node("response_node", response_node)
 
     # ── Entry point ──────────────────────────────────────
@@ -107,6 +113,7 @@ def build_graph():
             "ticket_lookup_node": "ticket_lookup_node",
             "ticket_creation_node": "ticket_creation_node",
             "employee_registration_node": "employee_registration_node",
+            "employee_deletion_node": "employee_deletion_node",
             "response_node": "response_node",
         }
     )
@@ -117,6 +124,7 @@ def build_graph():
         "ticket_lookup_node",
         "ticket_creation_node",
         "employee_registration_node",
+        "employee_deletion_node",
     ):
         workflow.add_conditional_edges(
             tool_node,

@@ -22,13 +22,16 @@ class AgentState(BaseModel):
     employee_name: Optional[str] = None
 
     # Current intent determined by the router
-    intent: Optional[str] = None  # "knowledge_search" | "ticket_lookup" | "ticket_creation" | "general"
+    intent: Optional[str] = None  # "knowledge_search" | "ticket_lookup" | "ticket_creation" | "employee_registration" | "employee_deletion" | "general"
 
     # Pending ticket data being collected for ticket creation
     pending_ticket: Optional[dict] = None
 
     # Pending employee data being collected for employee registration
     pending_employee: Optional[dict] = None
+
+    # Pending employee deletion flow data
+    pending_delete: Optional[dict] = None
 
     # Whether we're in multi-turn info collection mode
     awaiting_info: bool = False

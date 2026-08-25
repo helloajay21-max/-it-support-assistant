@@ -16,6 +16,7 @@ from tools.knowledge_search import knowledge_search
 from tools.ticket_creation import ticket_creation
 from tools.ticket_lookup import ticket_lookup
 from tools.employee_registration import create_employee
+from tools.employee_deletion import delete_employee
 from data.init_db import get_db_connection
 from utils.logger import get_logger
 
@@ -72,6 +73,7 @@ Your capabilities:
 2. **Ticket Lookup** – Check the status of existing IT support tickets.
 3. **Ticket Creation** – Create new IT support tickets.
 4. **Employee Registration** – Register a new employee so they can access IT services and raise tickets.
+5. **Employee Deletion** – Deactivate or permanently delete employee records.
 
 Guidelines:
 - Be professional, friendly, and concise.
@@ -81,6 +83,7 @@ Guidelines:
 - If you lack information, ask the user clearly.
 - For ticket creation, always confirm details with the user before creating.
 - For employee registration, collect name, email, and department before confirming.
+- For employee deletion, always confirm scope (deactivate vs hard delete).
 - Distinguish clearly between retrieved data and your own suggestions.
 - Handle errors gracefully and provide helpful alternatives.
 
@@ -89,6 +92,7 @@ When detecting intent, classify as:
 - ticket_lookup: user wants to check ticket status or view their tickets
 - ticket_creation: user wants to raise/create/log a new support ticket
 - employee_registration: user wants to register/onboard/add a new employee to the system
+- employee_deletion: user wants to deactivate/delete/remove an employee record
 - general: general greeting, thank you, or out-of-scope question
 """
 
@@ -152,6 +156,7 @@ Classify the intent as exactly ONE of:
 - ticket_lookup: user wants to check ticket status
 - ticket_creation: user wants to create/raise a new ticket
 - employee_registration: user wants to register/onboard/add a new employee
+- employee_deletion: user wants to delete/deactivate/remove an employee
 - general: greeting, thanks, or unrelated to IT support
 
 Also extract if mentioned:
@@ -558,6 +563,112 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
     return {
         "tool_output": result,
         "pending_ticket": None,
+        "awaiting_info": False,
+        "awaiting_field": None,
+    }
+
+
+def employee_deletion_node(state: AgentState) -> dict:
+    """
+    Deactivate or hard-delete an employee from the database with confirmation.
+    """
+    logger.info("Employee deletion node executing (awaiting_field=%s)", state.awaiting_field)
+
+    last_human_message = ""
+    for msg in reversed(state.messages):
+        if isinstance(msg, HumanMessage):
+            last_human_message = msg.content
+            break
+
+    pending = dict(state.pending_delete) if state.pending_delete else {}
+    field = state.awaiting_field
+
+    # collect follow-up answers
+    if field == "delete_employee_id":
+        m = re.search(r"\bEMP\d{4,}\b", last_human_message, re.IGNORECASE)
+        if not m:
+            return {
+                "messages": [AIMessage(content="Please provide a valid employee ID in format EMP####.")],
+                "pending_delete": pending,
+                "awaiting_info": True,
+                "awaiting_field": "delete_employee_id",
+                "intent": "employee_deletion",
+            }
+        pending["employee_id"] = m.group(0).upper()
+
+    if field == "delete_mode":
+        msg = last_human_message.lower()
+        pending["hard_delete"] = any(k in msg for k in ["hard", "permanent", "purge", "delete tickets"])
+
+    if field == "delete_confirmation":
+        affirmative = any(w in last_human_message.lower() for w in ["yes", "y", "confirm", "proceed", "delete"])
+        if not affirmative:
+            return {
+                "messages": [AIMessage(content="Understood, employee deletion was cancelled.")],
+                "pending_delete": None,
+                "awaiting_info": False,
+                "awaiting_field": None,
+                "intent": "general",
+            }
+        pending["confirmed"] = True
+
+    # infer employee_id from current message if present
+    if not pending.get("employee_id"):
+        m = re.search(r"\bEMP\d{4,}\b", last_human_message, re.IGNORECASE)
+        if m:
+            pending["employee_id"] = m.group(0).upper()
+
+    if not pending.get("employee_id"):
+        return {
+            "messages": [AIMessage(content="Please provide the employee ID you want to delete/deactivate (e.g., EMP1025).")],
+            "pending_delete": pending,
+            "awaiting_info": True,
+            "awaiting_field": "delete_employee_id",
+            "intent": "employee_deletion",
+            "tool_output": None,
+        }
+
+    if "hard_delete" not in pending:
+        return {
+            "messages": [AIMessage(content=(
+                f"For **{pending['employee_id']}**, should I do:\n"
+                f"1) **Deactivate** (keeps tickets), or\n"
+                f"2) **Hard delete** (removes employee + all tickets)?\n\n"
+                f"Reply with *deactivate* or *hard delete*."
+            ))],
+            "pending_delete": pending,
+            "awaiting_info": True,
+            "awaiting_field": "delete_mode",
+            "intent": "employee_deletion",
+            "tool_output": None,
+        }
+
+    if not pending.get("confirmed"):
+        action = "HARD DELETE employee + tickets" if pending["hard_delete"] else "DEACTIVATE employee (keep tickets)"
+        return {
+            "messages": [AIMessage(content=(
+                f"Please confirm: **{action}** for `{pending['employee_id']}`?\n\n"
+                f"Reply **Yes** to continue or **No** to cancel."
+            ))],
+            "pending_delete": pending,
+            "awaiting_info": True,
+            "awaiting_field": "delete_confirmation",
+            "intent": "employee_deletion",
+            "tool_output": None,
+        }
+
+    try:
+        result = delete_employee.invoke({
+            "employee_id": pending["employee_id"],
+            "hard_delete": bool(pending.get("hard_delete", False)),
+        })
+    except Exception as exc:
+        logger.error("employee_deletion tool error: %s", exc)
+        result = "❌ Failed to process employee deletion request."
+
+    return {
+        "tool_output": result,
+        "pending_delete": None,
         "awaiting_info": False,
         "awaiting_field": None,
     }

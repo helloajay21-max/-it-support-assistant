@@ -147,7 +147,7 @@ def get_agent_graph():
 
 
 # ── Agent invocation ──────────────────────────────────────────────────────────
-def run_agent(user_input: str) -> Optional[str]:
+def run_agent(user_input: str, forced_employee_id: Optional[str] = None) -> Optional[str]:
     """
     Invoke the LangGraph agent with the user's input.
 
@@ -166,18 +166,23 @@ def run_agent(user_input: str) -> Optional[str]:
         prior = st.session_state.agent_state
         input_state = {
             "messages": list(prior.messages) + [new_message],
-            "employee_id": prior.employee_id,
+            "employee_id": forced_employee_id or prior.employee_id,
             "employee_name": prior.employee_name,
             "intent": prior.intent,
             "pending_ticket": prior.pending_ticket,
             "pending_employee": prior.pending_employee,
+            "pending_delete": prior.pending_delete,
             "awaiting_info": prior.awaiting_info,
             "awaiting_field": prior.awaiting_field,
             "tool_output": None,
             "turn_count": prior.turn_count,
         }
     else:
-        input_state = {"messages": [new_message]}
+        input_state = {
+            "messages": [new_message],
+            "employee_id": forced_employee_id,
+            "employee_name": AUTHOR_NAME if forced_employee_id else None,
+        }
 
     try:
         result = graph.invoke(input_state)
@@ -199,6 +204,7 @@ def run_agent(user_input: str) -> Optional[str]:
                     "ticket_lookup": "🎫 Ticket Lookup",
                     "ticket_creation": "📝 Ticket Creation",
                     "employee_registration": "👤 Employee Registration",
+                    "employee_deletion": "🗑️ Employee Deletion",
                 }
                 tool_label = tool_map.get(intent, intent)
                 st.session_state.tool_calls_log.append({
@@ -288,6 +294,9 @@ def render_sidebar():
                 "emp_department": "Department",
                 "emp_role":       "Role / Job title",
                 "emp_confirmation": "Confirmation (Yes/No)",
+                "delete_employee_id": "Employee ID to delete",
+                "delete_mode": "Delete mode (deactivate / hard delete)",
+                "delete_confirmation": "Deletion confirmation (Yes/No)",
             }
             friendly = field_labels.get(agent_state.awaiting_field, agent_state.awaiting_field)
             st.warning(f"⏳ Awaiting: **{friendly}**")
@@ -315,6 +324,7 @@ def render_sidebar():
             ("🎫", "Ticket Lookup", "Check existing ticket status"),
             ("📝", "Ticket Creation", "Raise a new support ticket"),
             ("👤", "Employee Registration", "Onboard a new employee"),
+            ("🗑️", "Employee Deletion", "Deactivate or delete employee records"),
         ]
         for icon, name, desc in tools_info:
             st.markdown(f"**{icon} {name}**  \n{desc}")
@@ -323,24 +333,20 @@ def render_sidebar():
 
         # ── Quick Prompts — clean labels, personalized messages ──
         st.markdown("### 💬 Quick Prompts")
-        # Each entry: (button label shown, message sent to agent)
+        # Each entry: (button label shown, message sent to agent, optional forced employee ID)
         quick_prompts = [
-            ("How do I reset my VPN password?",
-             "How do I reset my VPN password?"),
-            ("Check my ticket status",
-             f"What is the status of my tickets? My employee ID is {AUTHOR_EMP_ID}."),
-            ("My laptop is slow — raise a ticket",
-             f"My laptop is very slow and hanging. Please raise a support ticket. My employee ID is {AUTHOR_EMP_ID}."),
-            ("How do I set up MFA?",
-             "How do I set up MFA on my phone?"),
-            ("I can't access the CRM system",
-             "I can't access the CRM system. Getting a 403 error."),
-            ("Register a new employee",
-             "I need to register a new employee in the system."),
+            ("How do I reset my VPN password?", "How do I reset my VPN password?", None),
+            ("Check my ticket status", "What is the status of my tickets?", AUTHOR_EMP_ID),
+            ("My laptop is slow — raise a ticket", "My laptop is very slow and hanging. Please raise a support ticket.", AUTHOR_EMP_ID),
+            ("How do I set up MFA?", "How do I set up MFA on my phone?", None),
+            ("I can't access the CRM system", "I can't access the CRM system. Getting a 403 error.", None),
+            ("Register a new employee", "I need to register a new employee in the system.", None),
+            ("Delete employee from DB", "Delete employee record from database", None),
         ]
-        for label, message in quick_prompts:
+        for label, message, forced_emp_id in quick_prompts:
             if st.button(label, key=f"qp_{label[:20]}", use_container_width=True):
                 st.session_state["pending_quick_prompt"] = message
+                st.session_state["pending_quick_emp_id"] = forced_emp_id
                 st.rerun()
 
         st.divider()
@@ -379,12 +385,14 @@ def render_main():
             - 🎫 **Ticket Status** — Check your existing support tickets
             - 📝 **Raise a Ticket** — Create a new IT support request
             - 👤 **Employee Registration** — Onboard a new employee into the system
+            - 🗑️ **Employee Deletion** — Deactivate or delete an employee from DB
 
             **Try asking:**
             - *"How do I reset my VPN password?"*
             - *"Check tickets for {AUTHOR_EMP_ID}"*
             - *"My laptop won't turn on, please raise a ticket"*
             - *"Register a new employee: Jane Smith, jane@techcorp.com, Engineering"*
+            - *"Delete employee EMP1025 (deactivate)"*
             """)
         else:
             for msg in st.session_state.messages:
@@ -393,6 +401,7 @@ def render_main():
 
     # Handle quick prompt from sidebar
     pending_prompt = st.session_state.pop("pending_quick_prompt", None)
+    pending_prompt_emp_id = st.session_state.pop("pending_quick_emp_id", None)
 
     # Chat input
     user_input = st.chat_input("Type your IT support request here...", key="chat_input")
@@ -410,7 +419,7 @@ def render_main():
         # Generate AI response
         with st.chat_message("assistant", avatar="🤖"):
             with st.spinner("🤔 Thinking..."):
-                response = run_agent(user_input)
+                response = run_agent(user_input, forced_employee_id=pending_prompt_emp_id if pending_prompt else None)
 
             if response:
                 st.markdown(response)

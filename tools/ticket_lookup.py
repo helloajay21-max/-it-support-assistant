@@ -31,6 +31,8 @@ def _format_ticket(row) -> str:
     status_icon = STATUS_ICONS.get(row["status"], "⚪")
     lines = [
         f"🎫 **Ticket ID:** `{row['ticket_id']}`",
+        f"🆔 **Employee ID:** {row['employee_id']}",
+        f"👤 **Employee Name:** {row['employee_name']}",
         f"📋 **Title:** {row['title']}",
         f"{status_icon} **Status:** {row['status']}",
         f"{PRIORITY_ICONS.get(row['priority'], '🔶')} **Priority:** {row['priority']}",
@@ -86,8 +88,8 @@ def _org_ticket_snapshot(cursor) -> list[str]:
     """Build organization-wide open/resolved snapshot across all employee IDs."""
     lines = [
         "### 🏢 Organization Ticket Snapshot (All EMP IDs)",
-        "| Employee ID | Name | Active | Resolved/Closed | Total |",
-        "|-------------|------|--------|-----------------|-------|",
+        "| Employee ID | Name | Active | Resolved/Closed | Total | Open Ticket IDs | Resolved Ticket IDs |",
+        "|-------------|------|--------|-----------------|-------|-----------------|---------------------|",
     ]
     cursor.execute(
         """
@@ -96,7 +98,9 @@ def _org_ticket_snapshot(cursor) -> list[str]:
             employee_name,
             SUM(CASE WHEN status IN ('Resolved', 'Closed') THEN 0 ELSE 1 END) AS active_count,
             SUM(CASE WHEN status IN ('Resolved', 'Closed') THEN 1 ELSE 0 END) AS resolved_count,
-            COUNT(*) AS total_count
+            COUNT(*) AS total_count,
+            GROUP_CONCAT(CASE WHEN status IN ('Resolved', 'Closed') THEN NULL ELSE ticket_id END, ', ') AS open_ticket_ids,
+            GROUP_CONCAT(CASE WHEN status IN ('Resolved', 'Closed') THEN ticket_id ELSE NULL END, ', ') AS resolved_ticket_ids
         FROM tickets
         GROUP BY employee_id, employee_name
         ORDER BY total_count DESC, employee_id
@@ -106,10 +110,11 @@ def _org_ticket_snapshot(cursor) -> list[str]:
     for row in rows:
         lines.append(
             f"| `{row['employee_id']}` | {row['employee_name']} | "
-            f"{row['active_count']} | {row['resolved_count']} | {row['total_count']} |"
+            f"{row['active_count']} | {row['resolved_count']} | {row['total_count']} | "
+            f"{(row['open_ticket_ids'] or '—')} | {(row['resolved_ticket_ids'] or '—')} |"
         )
     if len(rows) == 0:
-        lines.append("| — | — | 0 | 0 | 0 |")
+        lines.append("| — | — | 0 | 0 | 0 | — | — |")
     lines.append("")
     return lines
 
@@ -212,13 +217,14 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
 
         # ── Compact numbered index ────────────────────────────────────────────
         index_lines = [f"### 🗂️ Ticket Summary — {len(rows)} ticket(s) found\n"]
-        index_lines.append("| # | Ticket ID | Title | Status | Priority |")
-        index_lines.append("|---|-----------|-------|--------|----------|")
+        index_lines.append("| # | Ticket ID | Employee ID | Employee Name | Title | Status | Priority |")
+        index_lines.append("|---|-----------|-------------|---------------|-------|--------|----------|")
         for i, r in enumerate(rows, 1):
             icon = STATUS_ICONS.get(r["status"], "⚪")
             title_short = r["title"][:45] + ("…" if len(r["title"]) > 45 else "")
             index_lines.append(
-                f"| {i} | `{r['ticket_id']}` | {title_short} | {icon} {r['status']} | {r['priority']} |"
+                f"| {i} | `{r['ticket_id']}` | `{r['employee_id']}` | {r['employee_name']} | "
+                f"{title_short} | {icon} {r['status']} | {r['priority']} |"
             )
         index_lines.append("")
 
