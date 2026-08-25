@@ -580,6 +580,11 @@ def response_node(state: AgentState) -> dict:
             logger.error("LLM response error: %s", e)
             return {"messages": [AIMessage(content="I'm sorry, I encountered an error processing your request. Please try again.")], "tool_output": None}
 
+    # For structured tool outputs (especially ticket lookup), preserve the
+    # exact formatter output instead of re-summarizing via LLM.
+    if state.intent == "ticket_lookup":
+        return {"messages": [AIMessage(content=state.tool_output)], "tool_output": None}
+
     # Generate response incorporating tool output
     tool_output = state.tool_output
     last_human_message = ""
@@ -799,4 +804,3 @@ def employee_registration_node(state: AgentState) -> dict:
         "awaiting_info": False,
         "awaiting_field": None,
     }
-

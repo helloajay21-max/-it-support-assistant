@@ -82,6 +82,38 @@ def _linked_employee_ids(cursor, employee_id: str, profile: dict) -> list[str]:
         return [employee_id]
 
 
+def _org_ticket_snapshot(cursor) -> list[str]:
+    """Build organization-wide open/resolved snapshot across all employee IDs."""
+    lines = [
+        "### 🏢 Organization Ticket Snapshot (All EMP IDs)",
+        "| Employee ID | Name | Active | Resolved/Closed | Total |",
+        "|-------------|------|--------|-----------------|-------|",
+    ]
+    cursor.execute(
+        """
+        SELECT
+            employee_id,
+            employee_name,
+            SUM(CASE WHEN status IN ('Resolved', 'Closed') THEN 0 ELSE 1 END) AS active_count,
+            SUM(CASE WHEN status IN ('Resolved', 'Closed') THEN 1 ELSE 0 END) AS resolved_count,
+            COUNT(*) AS total_count
+        FROM tickets
+        GROUP BY employee_id, employee_name
+        ORDER BY total_count DESC, employee_id
+        """
+    )
+    rows = cursor.fetchall()
+    for row in rows:
+        lines.append(
+            f"| `{row['employee_id']}` | {row['employee_name']} | "
+            f"{row['active_count']} | {row['resolved_count']} | {row['total_count']} |"
+        )
+    if len(rows) == 0:
+        lines.append("| — | — | 0 | 0 | 0 |")
+    lines.append("")
+    return lines
+
+
 @tool
 def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
     """
@@ -149,6 +181,7 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
         )
         cursor.execute(query, tuple(linked_ids))
         rows = cursor.fetchall()
+        org_snapshot = _org_ticket_snapshot(cursor)
         conn.close()
 
         if not rows:
@@ -211,7 +244,7 @@ def ticket_lookup(employee_id: str, ticket_id: Optional[str] = None) -> str:
             "*Example: \"Show details for TKT-2024-009\"* or *\"Raise follow-up for TKT-2024-011\"*"
         )
 
-        return "\n".join(profile_lines + index_lines + detail_lines + [footer])
+        return "\n".join(profile_lines + index_lines + detail_lines + ["---", *org_snapshot, footer])
 
     except Exception as e:
         logger.error("Ticket lookup error: %s", e, exc_info=True)
