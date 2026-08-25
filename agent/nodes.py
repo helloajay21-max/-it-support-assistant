@@ -62,6 +62,20 @@ def get_llm():
     return _llm
 
 
+def _is_affirmative(text: str) -> bool:
+    """Return True when text clearly expresses confirmation."""
+    lowered = (text or "").lower()
+    phrases = ["yes", "confirm", "confirmed", "sure", "ok", "okay", "proceed", "create", "go ahead", "do it"]
+    return any(re.search(rf"\b{re.escape(p)}\b", lowered) for p in phrases)
+
+
+def _is_negative(text: str) -> bool:
+    """Return True when text clearly expresses cancellation/decline."""
+    lowered = (text or "").lower()
+    phrases = ["no", "cancel", "stop", "don't", "do not", "not now", "abort"]
+    return any(re.search(rf"\b{re.escape(p)}\b", lowered) for p in phrases)
+
+
 # ------------------------------------------------------------------
 # System Prompt
 # ------------------------------------------------------------------
@@ -238,7 +252,7 @@ def collect_info_node(state: AgentState) -> dict:
             return {"messages": [response]}
 
     elif field == "confirmation":
-        affirmative = any(word in last_human_message.lower() for word in ["yes", "y", "confirm", "sure", "ok", "proceed", "create", "go ahead"])
+        affirmative = _is_affirmative(last_human_message)
         if affirmative:
             updates["awaiting_info"] = False
             updates["awaiting_field"] = None
@@ -330,7 +344,7 @@ def knowledge_search_node(state: AgentState) -> dict:
 
     # Step B: after asking "check existing tickets?"
     if state.awaiting_field == "triage_ticket_check":
-        affirmative = any(w in lowered for w in ["yes", "y", "check", "sure", "ok", "proceed"])
+        affirmative = _is_affirmative(lowered) or "check tickets" in lowered
         query_for_kb = pending_triage.get("issue_query", last_human_message)
 
         if affirmative and state.employee_id:
@@ -473,6 +487,50 @@ def ticket_creation_node(state: AgentState) -> dict:
     pending = dict(state.pending_ticket) if state.pending_ticket else {}
     field = state.awaiting_field
 
+    # ── Handle ticket confirmation response explicitly (Yes/No) ────────────────
+    if field == "confirmation":
+        lowered = last_human_message.lower()
+        affirmative = _is_affirmative(lowered)
+        negative = _is_negative(lowered)
+
+        if affirmative:
+            pending["confirmed"] = True
+        elif negative:
+            wants_register = any(w in lowered for w in ["register", "new employee", "onboard", "create employee"])
+            if wants_register:
+                return {
+                    "messages": [AIMessage(content=(
+                        "Understood — ticket creation has been cancelled.\n\n"
+                        "Let's register a new employee first. Please share details in this format:\n"
+                        "**Name, Email, Department**\n\n"
+                        "Example: `Ajay Sinha, ajay.sinha@techcorp.com, HR`"
+                    ))],
+                    "pending_ticket": None,
+                    "pending_employee": {},
+                    "awaiting_info": True,
+                    "awaiting_field": "emp_name",
+                    "intent": "employee_registration",
+                    "tool_output": None,
+                }
+
+            return {
+                "messages": [AIMessage(content="Understood, ticket creation has been cancelled. If you want, I can help register a new employee first.")],
+                "pending_ticket": None,
+                "awaiting_info": False,
+                "awaiting_field": None,
+                "intent": "general",
+                "tool_output": None,
+            }
+        else:
+            return {
+                "messages": [AIMessage(content="Please reply **Yes** to create the ticket or **No** to cancel.")],
+                "pending_ticket": pending,
+                "awaiting_info": True,
+                "awaiting_field": "confirmation",
+                "intent": "ticket_creation",
+                "tool_output": None,
+            }
+
     # ── Collect answers for the inline auto-registration sub-flow ─────────────
     if field == "new_emp_name":
         val = last_human_message.strip()
@@ -518,7 +576,28 @@ def ticket_creation_node(state: AgentState) -> dict:
 
     # ── Step 1: Need employee ID ──────────────────────────────────────────────
     if not state.employee_id:
-        response = AIMessage(content="I'd be happy to create a support ticket for you! First, I'll need your **employee ID** (e.g., EMP1025). What is your employee ID?")
+        lowered = last_human_message.lower()
+        if any(w in lowered for w in ["register new employee", "register employee", "new employee", "onboard employee"]):
+            return {
+                "messages": [AIMessage(content=(
+                    "Sure — let's register the new employee first.\n\n"
+                    "Please share details in this format:\n"
+                    "**Name, Email, Department**\n\n"
+                    "Example: `Ajay Sinha, ajay.sinha@techcorp.com, HR`"
+                ))],
+                "pending_ticket": None,
+                "pending_employee": {},
+                "awaiting_info": True,
+                "awaiting_field": "emp_name",
+                "intent": "employee_registration",
+                "tool_output": None,
+            }
+
+        response = AIMessage(content=(
+            "I'd be happy to create a support ticket for you!\n\n"
+            "Please provide your **employee ID** (e.g., EMP1025).\n"
+            "If you don't have one yet, say: **register new employee**."
+        ))
         return {
             "messages": [response],
             "awaiting_info": True,
@@ -575,7 +654,6 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
 
     # ── Step 4: Confirm before creating ──────────────────────────────────────
     if not pending.get("confirmed"):
-        pending["confirmed"] = True
         confirm_msg = (
             f"Here are the details for your new support ticket:\n\n"
             f"👤 **Employee ID:** {state.employee_id}\n"
@@ -725,7 +803,7 @@ def employee_deletion_node(state: AgentState) -> dict:
         pending["hard_delete"] = any(k in msg for k in ["hard", "permanent", "purge", "delete tickets"])
 
     if field == "delete_confirmation":
-        affirmative = any(w in last_human_message.lower() for w in ["yes", "y", "confirm", "proceed", "delete"])
+        affirmative = _is_affirmative(last_human_message) or bool(re.search(r"\bdelete\b", (last_human_message or "").lower()))
         if not affirmative:
             return {
                 "messages": [AIMessage(content="Understood, employee deletion was cancelled.")],
@@ -885,7 +963,16 @@ def employee_registration_node(state: AgentState) -> dict:
 
     if field == "emp_name":
         name_val = last_human_message.strip()
-        if len(name_val) >= 2:
+
+        # Support one-line input: "Name, Email, Department[, Role]"
+        parts = [p.strip() for p in name_val.split(",")]
+        if len(parts) >= 3 and re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", parts[1]):
+            pending["name"] = parts[0]
+            pending["email"] = parts[1]
+            pending["department"] = parts[2]
+            if len(parts) >= 4 and parts[3]:
+                pending["role"] = parts[3]
+        elif len(name_val) >= 2:
             pending["name"] = name_val
         else:
             return {
@@ -928,10 +1015,7 @@ def employee_registration_node(state: AgentState) -> dict:
         pending["role"] = role_val if role_val else "Employee"
 
     elif field == "emp_confirmation":
-        affirmative = any(
-            w in last_human_message.lower()
-            for w in ["yes", "y", "confirm", "sure", "ok", "proceed", "register", "go ahead", "correct"]
-        )
+        affirmative = _is_affirmative(last_human_message) or bool(re.search(r"\bregister\b", (last_human_message or "").lower()))
         if not affirmative:
             response = AIMessage(content="Understood — employee registration has been cancelled. Is there anything else I can help you with?")
             return {
