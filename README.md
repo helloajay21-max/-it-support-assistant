@@ -62,7 +62,7 @@ An **Agentic AI system** where an LLM acts as an intelligent agent that:
 AgentState {
   messages[]        ← full conversation (add_messages reducer)
   employee_id       ← persisted across turns
-  intent            ← knowledge_search | ticket_lookup | ticket_creation | general
+  intent            ← knowledge_search | ticket_lookup | ticket_creation | employee_registration | employee_deletion | general
   pending_ticket    ← in-progress ticket data for multi-turn creation
   awaiting_info     ← multi-turn collection flag
   awaiting_field    ← which field we are waiting for
@@ -107,7 +107,9 @@ it-support-assistant/
 ├── tools/
 │   ├── knowledge_search.py           ← Tool 1: Search IT knowledge base
 │   ├── ticket_lookup.py              ← Tool 2: Look up support tickets
-│   └── ticket_creation.py            ← Tool 3: Create new tickets (with validation)
+│   ├── ticket_creation.py            ← Tool 3: Create new tickets (with validation)
+│   ├── employee_registration.py      ← Tool 4: Register employees (with validation)
+│   └── employee_deletion.py          ← Tool 5: Deactivate/delete employees
 │
 ├── data/
 │   ├── init_db.py                    ← DB schema + 8 sample tickets
@@ -340,6 +342,19 @@ Agent: Here are the ticket details:
 User:  Yes
 
 Agent: ✅ Ticket TKT-2024-009 created! IT will respond within 4 hours.
+```
+
+### Employee Registration (manager-aware)
+```
+User:  Register new employee: Jane Smith, jane@techcorp.com, HR, Carol Davis
+
+Agent: Please confirm:
+       Name: Jane Smith
+       Email: jane@techcorp.com
+       Department: HR
+       Manager: Carol Davis
+       Role: Employee
+       Shall I register this employee? (Yes/No)
 ```
 
 ---

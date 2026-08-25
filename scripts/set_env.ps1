@@ -2,17 +2,17 @@
 PowerShell helper — set local Windows environment variables for development.
 
 Usage:
-  .\scripts\set_env.ps1 -OpenAIKey "sk-..." -DockerUser "helloajay21" -DockerToken "dckr_pat_..."
+  .\scripts\set_env.ps1 -OpenAIKey "sk-..." -DockerUser "your-dockerhub-username" -DockerToken "dckr_pat_..."
 
 After running, open a NEW terminal to pick up the new values.
 #>
 param(
   [string]$OpenAIKey    = "",
-  [string]$DockerUser   = "helloajay21",
+  [string]$DockerUser   = "your-dockerhub-username",
   [string]$DockerToken  = "",
-  [string]$ResourceGroup = "Ajay-Practice",
-  [string]$WebApp       = "it-support-ajay-001",
-  [string]$SubscriptionId = "cf9cf236-9d67-496c-97b1-5485d32f0dd3",
+  [string]$ResourceGroup = "your-resource-group",
+  [string]$WebApp       = "your-webapp-name",
+  [string]$SubscriptionId = "00000000-0000-0000-0000-000000000000",
   [string]$SqliteDbPath = "data/tickets.db"
 )
 

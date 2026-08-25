@@ -9,17 +9,16 @@ Go to: GitHub Repo → Settings → Secrets and variables → Actions → New re
 │ AZURE_CREDENTIALS    │ JSON from: ./scripts/create_service_principal.sh           │
 │                      │ (same format as MCP-Project AZURE_CREDENTIALS)             │
 ├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ DOCKERHUB_USERNAME   │ helloajay21                                                │
+│ DOCKERHUB_USERNAME   │ your-dockerhub-username                                    │
 ├──────────────────────┼────────────────────────────────────────────────────────────┤
 │ DOCKERHUB_TOKEN      │ Your Docker Hub access token (same as MCP-Project) ✅      │
 ├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ RESOURCE_GROUP       │ Ajay-Practice                                              │
+│ RESOURCE_GROUP       │ your-resource-group                                        │
 ├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ WEBAPP_NAME          │ it-support-ajay-001                                        │
+│ WEBAPP_NAME          │ your-webapp-name                                           │
 ├──────────────────────┼────────────────────────────────────────────────────────────┤
-│ OPENAI_API_KEY       │ Same sk-... key used in MCP-Project ✅                     │
+│ OPENAI_API_KEY       │ sk-...                                                     │
 └──────────────────────┴────────────────────────────────────────────────────────────┘
 
 That's it — only 6 secrets needed.
-4 of them you already have from MCP-Project (AZURE_CREDENTIALS, DOCKERHUB_USERNAME, DOCKERHUB_TOKEN, OPENAI_API_KEY).
-2 are new (RESOURCE_GROUP = Ajay-Practice, WEBAPP_NAME = it-support-ajay-001).
+Set the values for your own Azure and Docker Hub environment.

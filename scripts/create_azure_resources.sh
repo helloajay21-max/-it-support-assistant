@@ -11,12 +11,12 @@
 
 set -euo pipefail
 
-SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-cf9cf236-9d67-496c-97b1-5485d32f0dd3}"
-RESOURCE_GROUP="${RESOURCE_GROUP:-Ajay-Practice}"
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-00000000-0000-0000-0000-000000000000}"
+RESOURCE_GROUP="${RESOURCE_GROUP:-your-resource-group}"
 LOCATION="${LOCATION:-centralindia}"
-PLAN_NAME="${PLAN_NAME:-mcp-app-plan}"          # reuse existing plan from MCP-Project
-WEBAPP_NAME="${WEBAPP_NAME:-it-support-ajay-001}"
-DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-helloajay21}"
+PLAN_NAME="${PLAN_NAME:-your-app-service-plan}"
+WEBAPP_NAME="${WEBAPP_NAME:-your-webapp-name}"
+DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-your-dockerhub-username}"
 IMAGE_NAME="it-support-assistant"
 
 echo "══════════════════════════════════════════════"
@@ -32,11 +32,11 @@ echo ""
 
 az account set --subscription "$SUBSCRIPTION_ID"
 
-# Resource group (likely already exists — Ajay-Practice)
+# Resource group
 az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --output none 2>/dev/null || true
 echo "✅ Resource group: $RESOURCE_GROUP"
 
-# App Service Plan — reuse existing mcp-app-plan if it exists
+# App Service Plan — create if it does not exist
 PLAN_EXISTS=$(az appservice plan show -g "$RESOURCE_GROUP" -n "$PLAN_NAME" --query name -o tsv 2>/dev/null || echo "")
 if [ -z "$PLAN_EXISTS" ]; then
     az appservice plan create -g "$RESOURCE_GROUP" -n "$PLAN_NAME" --is-linux --sku B1 --output none

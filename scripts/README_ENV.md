@@ -7,7 +7,7 @@ Run once to set local environment variables for development:
 ```powershell
 .\scripts\set_env.ps1 `
   -OpenAIKey "sk-..." `
-  -DockerUser "helloajay21" `
+  -DockerUser "your-dockerhub-username" `
   -DockerToken "dckr_pat_..."
 ```
 
@@ -24,11 +24,11 @@ Add these as **Secrets** (New repository secret):
 | Secret Name | Value | How to get |
 |-------------|-------|-----------|
 | `AZURE_CREDENTIALS` | Full JSON from `create_service_principal.sh` | `./scripts/create_service_principal.sh` |
-| `DOCKERHUB_USERNAME` | `helloajay21` | Your Docker Hub username |
+| `DOCKERHUB_USERNAME` | `your-dockerhub-username` | Your Docker Hub username |
 | `DOCKERHUB_TOKEN` | `dckr_pat_...` | Docker Hub → Account Settings → Security → Access Tokens |
-| `RESOURCE_GROUP` | `Ajay-Practice` | Same as MCP-Project |
-| `WEBAPP_NAME` | `it-support-ajay-001` | Created by `create_azure_resources.sh` |
-| `OPENAI_API_KEY` | `sk-...` | **Same key as MCP-Project** ✅ |
+| `RESOURCE_GROUP` | `your-resource-group` | Set in your Azure environment |
+| `WEBAPP_NAME` | `your-webapp-name` | Created by `create_azure_resources.sh` |
+| `OPENAI_API_KEY` | `sk-...` | OpenAI API key |
 
 ---
 

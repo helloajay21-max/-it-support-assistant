@@ -78,9 +78,9 @@ jobs:
 # ──────────────────────────────────────────────────────
 # Required GitHub SECRETS (Settings → Secrets → Actions):
 #   AZURE_CREDENTIALS   — az ad sp create-for-rbac --sdk-auth JSON
-#   DOCKERHUB_USERNAME  — helloajay21
+#   DOCKERHUB_USERNAME  — your Docker Hub username
 #   DOCKERHUB_TOKEN     — Docker Hub access token
-#   WEBAPP_NAME         — it-support-ajay-001
-#   RESOURCE_GROUP      — Ajay-Practice
-#   OPENAI_API_KEY      — sk-... (same key as MCP-Project)
+#   WEBAPP_NAME         — your-webapp-name
+#   RESOURCE_GROUP      — your-resource-group
+#   OPENAI_API_KEY      — sk-...
 # ──────────────────────────────────────────────────────

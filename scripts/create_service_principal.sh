@@ -6,8 +6,8 @@
 #   chmod +x scripts/create_service_principal.sh
 #   ./scripts/create_service_principal.sh
 
-SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-cf9cf236-9d67-496c-97b1-5485d32f0dd3}"
-RESOURCE_GROUP="${RESOURCE_GROUP:-Ajay-Practice}"
+SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-00000000-0000-0000-0000-000000000000}"
+RESOURCE_GROUP="${RESOURCE_GROUP:-your-resource-group}"
 SP_NAME="it-support-github-sp"
 
 echo "Creating service principal: $SP_NAME"
