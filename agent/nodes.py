@@ -141,11 +141,18 @@ def _smtp_settings() -> dict:
         "password": os.getenv("SMTP_PASSWORD", "").strip(),
         "from_email": os.getenv("SMTP_FROM_EMAIL", "").strip(),
         "use_tls": os.getenv("SMTP_USE_TLS", "true").strip().lower() in ("1", "true", "yes"),
+        # Set SMTP_USE_SSL=true to use direct SSL (port 465) instead of STARTTLS (port 587)
+        "use_ssl": os.getenv("SMTP_USE_SSL", "false").strip().lower() in ("1", "true", "yes"),
     }
 
 
 def _send_email(to_email: str, subject: str, body: str, admin_email: str | None = None) -> tuple[bool, str]:
-    """Send an email via SMTP using configured environment settings."""
+    """Send an email via SMTP using configured environment settings.
+
+    Supports two modes:
+    - STARTTLS (default, port 587): set SMTP_USE_TLS=true
+    - Direct SSL  (port 465):       set SMTP_USE_SSL=true
+    """
     cfg = _smtp_settings()
     if not cfg["host"] or not cfg["from_email"]:
         return False, "SMTP not configured (SMTP_HOST/SMTP_FROM_EMAIL missing)"
@@ -159,16 +166,36 @@ def _send_email(to_email: str, subject: str, body: str, admin_email: str | None 
     msg.set_content(body)
 
     try:
-        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=25) as server:
-            if cfg["use_tls"]:
-                server.starttls(context=ssl.create_default_context())
-            if cfg["username"]:
-                server.login(cfg["username"], cfg["password"])
-            server.send_message(msg)
+        if cfg["use_ssl"]:
+            # Direct SSL connection — typically port 465
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ctx, timeout=25) as server:
+                if cfg["username"]:
+                    server.login(cfg["username"], cfg["password"])
+                server.send_message(msg)
+        else:
+            # STARTTLS connection — typically port 587
+            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=25) as server:
+                server.ehlo()
+                if cfg["use_tls"]:
+                    server.starttls(context=ssl.create_default_context())
+                    server.ehlo()  # Re-identify after STARTTLS upgrade
+                if cfg["username"]:
+                    server.login(cfg["username"], cfg["password"])
+                server.send_message(msg)
         return True, "Sent"
+    except smtplib.SMTPAuthenticationError as exc:
+        logger.error("SMTP auth failed to %s: %s", to_email, exc)
+        return False, f"Authentication failed — check SMTP_USERNAME / SMTP_PASSWORD. Detail: {exc}"
+    except smtplib.SMTPConnectError as exc:
+        logger.error("SMTP connect failed (%s:%s): %s", cfg["host"], cfg["port"], exc)
+        return False, f"Cannot connect to {cfg['host']}:{cfg['port']}. Detail: {exc}"
+    except smtplib.SMTPException as exc:
+        logger.error("SMTP error sending to %s: %s", to_email, exc)
+        return False, f"SMTP error: {exc}"
     except Exception as exc:
-        logger.error("SMTP send failed to %s: %s", to_email, exc)
-        return False, f"SMTP send failed: {exc}"
+        logger.error("Unexpected error sending email to %s: %s", to_email, exc)
+        return False, f"Unexpected error: {exc}"
 
 
 def _queue_vpn_email_dispatches(employee_id: str, employee_email: str, employee_name: str = "Employee") -> tuple[bool, str]:
@@ -294,13 +321,15 @@ def intent_node(state: AgentState) -> dict:
     if not last_human_message:
         return {"intent": "general", "turn_count": state.turn_count + 1}
 
-    # Extract employee ID from message if not already known
-    employee_id = state.employee_id
-    if not employee_id:
-        match = re.search(r"\bEMP\d{4,}\b", last_human_message, re.IGNORECASE)
-        if match:
-            employee_id = match.group(0).upper()
-            logger.info("Extracted employee ID from message: %s", employee_id)
+    # Always extract employee ID from current message first — this prevents a stale
+    # session employee_id (e.g. EMP1025 from a prior quick-prompt) from silently
+    # overriding what the user actually typed in the new message.
+    match = re.search(r"\bEMP\d{4,}\b", last_human_message, re.IGNORECASE)
+    if match:
+        employee_id = match.group(0).upper()
+        logger.info("Extracted employee ID from message: %s", employee_id)
+    else:
+        employee_id = state.employee_id  # Fall back to known session ID
 
     # ── Preserve intent during multi-turn info collection ─────────────────────
     # When we are mid-flow (awaiting_info=True), the user's short answer
@@ -651,18 +680,99 @@ def knowledge_search_node(state: AgentState) -> dict:
 def ticket_lookup_node(state: AgentState) -> dict:
     """
     Executes the ticket lookup tool.
-    Ensures employee ID is available before proceeding.
+    - If the current message contains an explicit EMP ID, uses that (overrides state).
+    - If message contains 'all'/'everyone'/org keywords, returns the org-wide snapshot.
+    - Otherwise asks the user for an employee ID.
     """
     logger.info("Ticket lookup node executing")
 
-    if not state.employee_id:
-        response = AIMessage(content="To look up your tickets, I need your **employee ID** first. Please provide it (e.g., EMP1024).")
+    # Extract employee ID and intent keywords from the CURRENT user message
+    last_human_message = ""
+    current_msg_emp_id = None
+    for msg in reversed(state.messages):
+        if isinstance(msg, HumanMessage):
+            last_human_message = msg.content
+            m = re.search(r"\bEMP\d{4,}\b", msg.content, re.IGNORECASE)
+            if m:
+                current_msg_emp_id = m.group(0).upper()
+            break
+
+    lowered = last_human_message.lower()
+    wants_all = any(w in lowered for w in [
+        "all ticket", "all emp", "all employee", "everyone", "every employee",
+        "organization", "org ticket", "show all", "all status",
+    ])
+
+    # Resolve effective employee ID
+    # Priority: current message > state (only if we were explicitly awaiting it)
+    if current_msg_emp_id:
+        effective_emp_id = current_msg_emp_id
+    elif state.awaiting_field == "employee_id" and state.employee_id:
+        # User just responded to our "please provide your EMP ID" prompt
+        effective_emp_id = state.employee_id
+    elif wants_all:
+        effective_emp_id = None  # Will trigger org-wide view below
+    else:
+        # No EMP ID in current message — ask rather than silently using stale state
+        effective_emp_id = None
+
+    if not effective_emp_id:
+        if wants_all:
+            # Return org-wide ticket snapshot without filtering by employee
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ticket_id, employee_id, employee_name, title, status, priority,
+                           category, created_at, updated_at, assigned_to, resolved_at, resolution_notes
+                    FROM tickets
+                    ORDER BY created_at DESC
+                """)
+                all_rows = cursor.fetchall()
+
+                from tools.ticket_lookup import STATUS_ICONS, PRIORITY_ICONS, _org_ticket_snapshot
+                org_lines = _org_ticket_snapshot(cursor)
+                conn.close()
+
+                open_rows = [r for r in all_rows if r["status"] not in ("Resolved", "Closed")]
+                resolved_rows = [r for r in all_rows if r["status"] in ("Resolved", "Closed")]
+
+                summary = [
+                    f"## 🏢 All Tickets — Organization-Wide ({len(all_rows)} total)\n",
+                    f"| # | Ticket ID | Employee ID | Name | Title | Status | Priority |",
+                    f"|---|-----------|-------------|------|-------|--------|----------|",
+                ]
+                for i, r in enumerate(all_rows, 1):
+                    icon = STATUS_ICONS.get(r["status"], "⚪")
+                    title_short = r["title"][:40] + ("…" if len(r["title"]) > 40 else "")
+                    summary.append(
+                        f"| {i} | `{r['ticket_id']}` | `{r['employee_id']}` | {r['employee_name']} | "
+                        f"{title_short} | {icon} {r['status']} | {r['priority']} |"
+                    )
+                summary.append("")
+                summary += org_lines
+                summary.append(
+                    "📌 Provide an **employee ID** (e.g. `EMP1001`) to see full ticket details for that employee."
+                )
+                return {
+                    "tool_output": "\n".join(summary),
+                    "intent": "ticket_lookup",
+                    "awaiting_info": False,
+                    "awaiting_field": None,
+                }
+            except Exception as e:
+                logger.error("Org-wide ticket lookup error: %s", e)
+
+        response = AIMessage(content=(
+            "To look up tickets, please provide an **employee ID** (e.g., EMP1024), "
+            "or say **'show all tickets'** to see the full organization-wide summary."
+        ))
         return {
             "messages": [response],
             "awaiting_info": True,
             "awaiting_field": "employee_id",
             "intent": "ticket_lookup",
-            "tool_output": None
+            "tool_output": None,
         }
 
     # Check if user mentioned a specific ticket ID
@@ -675,16 +785,16 @@ def ticket_lookup_node(state: AgentState) -> dict:
             break
 
     try:
-        params = {"employee_id": state.employee_id}
+        params = {"employee_id": effective_emp_id}
         if ticket_id:
             params["ticket_id"] = ticket_id
         result = ticket_lookup.invoke(params)
-        logger.info("Ticket lookup completed for: %s", state.employee_id)
+        logger.info("Ticket lookup completed for: %s", effective_emp_id)
     except Exception as e:
         logger.error("Ticket lookup tool error: %s", e)
         result = "Error: Ticket lookup encountered an issue. Please try again."
 
-    return {"tool_output": result}
+    return {"tool_output": result, "employee_id": effective_emp_id}
 
 
 def _employee_in_db(employee_id: str) -> bool:

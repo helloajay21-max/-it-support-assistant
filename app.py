@@ -492,7 +492,8 @@ def render_sidebar():
         # Each entry: (button label shown, message sent to agent, optional forced employee ID)
         quick_prompts = [
             ("How do I reset my VPN password?", "How do I reset my VPN password?", None),
-            ("Check my ticket status", "What is the status of my tickets?", AUTHOR_EMP_ID),
+            ("Check my ticket status", f"Check ticket status for {AUTHOR_EMP_ID}", AUTHOR_EMP_ID),
+            ("Show all employee tickets", "Show all tickets for all employees", None),
             ("My laptop is slow — raise a ticket", "My laptop is very slow and hanging. Please raise a support ticket.", AUTHOR_EMP_ID),
             ("How do I set up MFA?", "How do I set up MFA on my phone?", None),
             ("I can't access the CRM system", "I can't access the CRM system. Getting a 403 error.", None),

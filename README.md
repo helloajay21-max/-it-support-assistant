@@ -125,8 +125,7 @@ it-support-assistant/
 │   └── config.toml                   ← Streamlit theme + server settings
 │
 ├── azure/
-│   ├── deploy.sh                     ← Manual container deploy helper
-│   └── containerapp.yaml             ← Legacy container app manifest
+│   └── deploy.sh                     ← Manual container deploy helper
 │
 ├── scripts/
 │   ├── create_azure_resources.sh     ← Azure App Service provisioning
@@ -220,12 +219,15 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 | Variable | Required | Example Value | Description |
 |----------|----------|---------------|-------------|
 | `SMTP_HOST` | ✅ | `smtp.gmail.com` | SMTP server host |
-| `SMTP_PORT` | ✅ | `587` | SMTP port |
+| `SMTP_PORT` | ✅ | `587` | SMTP port (`587` for STARTTLS, `465` for direct SSL) |
 | `SMTP_USERNAME` | ✅ | `your-mailbox@gmail.com` | SMTP login username |
-| `SMTP_PASSWORD` | ✅ | `app-password-without-spaces` | SMTP login password |
+| `SMTP_PASSWORD` | ✅ | `app-password-without-spaces` | SMTP login password (use App Password for Gmail) |
 | `SMTP_FROM_EMAIL` | ✅ | `your-mailbox@gmail.com` | Sender email used for VPN notifications |
-| `SMTP_USE_TLS` | ❌ | `true` | Enable STARTTLS for SMTP |
+| `SMTP_USE_TLS` | ❌ | `true` | Enable STARTTLS upgrade (port 587) |
+| `SMTP_USE_SSL` | ❌ | `false` | Use direct SSL connection (port 465) — set `true` if STARTTLS is blocked |
 | `VPN_RESET_BASE_URL` | ❌ | `https://selfservice.techcorp.com/reset-vpn` | Link included in reset email |
+
+> **Gmail tip:** Create a dedicated [App Password](https://myaccount.google.com/apppasswords). Use port `587` + `SMTP_USE_TLS=true` (default) **or** port `465` + `SMTP_USE_SSL=true`.
 
 ---
 
@@ -279,7 +281,8 @@ Add these **Secrets**:
 | `SMTP_USERNAME` | SMTP login username |
 | `SMTP_PASSWORD` | SMTP app password / relay password |
 | `SMTP_FROM_EMAIL` | Sender mailbox used by the app |
-| `SMTP_USE_TLS` | `true` for STARTTLS |
+| `SMTP_USE_TLS` | `true` for STARTTLS (port 587) |
+| `SMTP_USE_SSL` | `false` (set `true` for direct SSL on port 465) |
 | `VPN_RESET_BASE_URL` | Link included in VPN reset emails |
 
 The deployment workflow applies the runtime configuration on every push to `main`, including:
@@ -342,7 +345,7 @@ Agent: 📚 Knowledge Base Article: "How to Reset VPN Password" (KB001)
        ...
 ```
 
-### Ticket Lookup
+### Ticket Lookup — specific employee
 ```
 User:  Check my tickets. My ID is EMP1024.
 
@@ -350,6 +353,23 @@ Agent: 📋 Support Tickets for EMP1024 — 2 ticket(s) found:
        Active Tickets (1):
        🎫 TKT-2024-002 | Laptop running very slowly | 🟡 In Progress
        ...
+```
+
+### Ticket Lookup — all employees (org-wide)
+```
+User:  Show all tickets
+
+Agent: 🏢 All Tickets — Organization-Wide (11 total)
+       | # | Ticket ID | Employee ID | Name | Title | Status | Priority |
+       ...
+       (full org snapshot with all employees)
+```
+
+### Direct VPN Setup Email (sidebar button — no conversation needed)
+```
+1. Enter Employee ID in the "📧 Send VPN Setup Email" sidebar section
+2. Click "📤 Send VPN Setup Email with Password"
+→ ✅ VPN setup + password reset emails sent to employee's registered email
 ```
 
 ### Ticket Creation (multi-turn)
