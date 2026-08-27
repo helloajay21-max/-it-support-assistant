@@ -47,7 +47,7 @@ jobs:
             --docker-registry-server-user ${{ secrets.DOCKERHUB_USERNAME }} \
             --docker-registry-server-password ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Configure app settings (env vars)
+      - name: Configure core app settings
         run: |
           az webapp config appsettings set \
             --name ${{ secrets.WEBAPP_NAME }} \
@@ -60,6 +60,17 @@ jobs:
               SQLITE_DB_PATH=/home/data/tickets.db \
               LOG_LEVEL=INFO \
               ADMIN_EMAIL="${{ secrets.ADMIN_EMAIL }}" \
+              APP_BASE_URL="${{ secrets.APP_BASE_URL }}"
+
+      - name: Configure SMTP settings (protected – skipped if SMTP_HOST secret is empty)
+        env:
+          _SMTP_CHECK: ${{ secrets.SMTP_HOST }}
+        if: env._SMTP_CHECK != ''
+        run: |
+          az webapp config appsettings set \
+            --name ${{ secrets.WEBAPP_NAME }} \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --settings \
               SMTP_HOST="${{ secrets.SMTP_HOST }}" \
               SMTP_PORT="${{ secrets.SMTP_PORT }}" \
               SMTP_USERNAME="${{ secrets.SMTP_USERNAME }}" \

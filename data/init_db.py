@@ -145,6 +145,23 @@ def init_db():
         )
     """)
 
+    # ── Pending approvals table ──────────────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pending_approvals (
+            approval_id    TEXT PRIMARY KEY,
+            request_type   TEXT NOT NULL,
+            employee_id    TEXT NOT NULL,
+            employee_email TEXT NOT NULL DEFAULT '',
+            employee_name  TEXT NOT NULL DEFAULT '',
+            request_data   TEXT NOT NULL,
+            status         TEXT NOT NULL DEFAULT 'Pending',
+            requested_at   TEXT NOT NULL,
+            resolved_at    TEXT,
+            result_message TEXT,
+            admin_notes    TEXT
+        )
+    """)
+
     # Resolve Ajay Kumar's manager name dynamically from JSON data
     _emp1025_manager = "my manager"
     try:

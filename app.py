@@ -6,6 +6,7 @@ Provides a chat interface with conversation history and tool visibility.
 import os
 import sys
 import time
+from datetime import datetime
 from typing import Optional
 
 import streamlit as st
@@ -153,6 +154,12 @@ def _fetch_db_rows(table_name: str) -> list[dict]:
             FROM email_dispatch_log
             ORDER BY requested_at DESC
         """,
+        "pending_approvals": """
+            SELECT approval_id, request_type, employee_id, employee_name, employee_email,
+                   status, requested_at, resolved_at, result_message
+            FROM pending_approvals
+            ORDER BY requested_at DESC
+        """,
     }
     if table_name not in queries:
         return []
@@ -164,8 +171,8 @@ def _fetch_db_rows(table_name: str) -> list[dict]:
     return rows
 
 
-def _db_counts() -> tuple[int, int, int]:
-    """Return (employees_count, tickets_count, email_dispatch_count)."""
+def _db_counts() -> tuple[int, int, int, int]:
+    """Return (employees_count, tickets_count, email_dispatch_count, pending_approvals_count)."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM employees")
@@ -174,8 +181,10 @@ def _db_counts() -> tuple[int, int, int]:
     tickets_count = int(cursor.fetchone()[0])
     cursor.execute("SELECT COUNT(*) FROM email_dispatch_log")
     email_dispatch_count = int(cursor.fetchone()[0])
+    cursor.execute("SELECT COUNT(*) FROM pending_approvals WHERE status='Pending'")
+    approvals_count = int(cursor.fetchone()[0])
     conn.close()
-    return employees_count, tickets_count, email_dispatch_count
+    return employees_count, tickets_count, email_dispatch_count, approvals_count
 
 
 def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_action: str = "") -> tuple[bool, str]:
@@ -225,6 +234,148 @@ def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_acti
     except Exception as exc:
         conn.close()
         return False, f"DB action failed: {exc}"
+
+
+def _update_employee_record(employee_id: str, updates: dict) -> tuple[bool, str]:
+    """Update editable fields on an existing employee record."""
+    allowed = {"name", "email", "department", "role", "manager_name", "status"}
+    filtered = {k: v for k, v in updates.items() if k in allowed and v is not None and str(v).strip()}
+    if not filtered:
+        return False, "No valid fields to update."
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        set_clause = ", ".join(f"{k} = ?" for k in filtered)
+        cursor.execute(
+            f"UPDATE employees SET {set_clause} WHERE employee_id = ?",
+            (*filtered.values(), employee_id),
+        )
+        updated = cursor.rowcount
+        conn.commit()
+        conn.close()
+        if updated:
+            return True, f"✅ Updated {employee_id}: {', '.join(filtered.keys())}"
+        return False, f"Employee {employee_id} not found."
+    except Exception as exc:
+        return False, f"Update failed: {exc}"
+
+
+def _get_pending_approval(token: str) -> Optional[dict]:
+    """Fetch a pending approval row by token."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM pending_approvals WHERE approval_id = ?", (token,))
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def _update_approval_status(token: str, status: str, result_message: str = "") -> None:
+    """Mark an approval as Approved or Rejected."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE pending_approvals SET status=?, resolved_at=?, result_message=? WHERE approval_id=?",
+            (status, datetime.now().isoformat(), result_message[:2000], token),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.error("Failed to update approval status: %s", exc)
+
+
+def _execute_approved_action(approval: dict) -> tuple[bool, str]:
+    """Execute the stored action for an approved request and notify the employee."""
+    import json as _json
+    request_type = approval.get("request_type", "")
+    try:
+        data = _json.loads(approval.get("request_data", "{}"))
+    except Exception:
+        return False, "Invalid request_data JSON."
+
+    result_msg = ""
+    try:
+        if request_type == "TICKET_CREATION":
+            from tools.ticket_creation import ticket_creation
+            result_msg = ticket_creation.invoke({
+                "employee_id": data["employee_id"],
+                "title":       data.get("title", "IT Support Request"),
+                "description": data.get("description", ""),
+                "category":    data.get("category", "Other"),
+                "priority":    data.get("priority", "Medium"),
+            })
+
+        elif request_type == "EMPLOYEE_REGISTRATION":
+            from tools.employee_registration import create_employee
+            result_msg = create_employee.invoke({
+                "name":         data.get("name", ""),
+                "email":        data.get("email", ""),
+                "department":   data.get("department", ""),
+                "manager_name": data.get("manager_name", "N/A"),
+                "role":         data.get("role", "Employee"),
+            })
+
+        elif request_type == "EMPLOYEE_DELETION":
+            from tools.employee_deletion import delete_employee
+            result_msg = delete_employee.invoke({
+                "employee_id": data["employee_id"],
+                "hard_delete": bool(data.get("hard_delete", False)),
+            })
+
+        else:
+            return False, f"Unknown request_type: {request_type}"
+
+        # Send confirmation email to employee
+        if approval.get("employee_email"):
+            from agent.nodes import _send_email
+            emp_name = approval.get("employee_name", "Employee")
+            subject  = f"IT Support — Your {request_type.replace('_',' ').title()} Request Approved"
+            body = (
+                f"Hello {emp_name},\n\n"
+                f"Your IT support request has been approved and processed.\n\n"
+                f"Request Type : {request_type.replace('_',' ').title()}\n\n"
+                f"Result:\n{result_msg}\n\n"
+                f"---\nTechCorp IT Support System"
+            )
+            _send_email(approval["employee_email"], subject, body)
+
+        return True, str(result_msg)
+
+    except Exception as exc:
+        logger.error("_execute_approved_action error: %s", exc)
+        return False, f"Execution error: {exc}"
+
+
+def _send_response_email(content: str, employee_id: Optional[str] = None) -> tuple[bool, str]:
+    """Send an agent response to the employee's registered email."""
+    target_email = AUTHOR_EMAIL
+    emp_name     = AUTHOR_NAME
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        eid = employee_id or AUTHOR_EMP_ID
+        cursor.execute("SELECT name, email FROM employees WHERE employee_id = ?", (eid,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            target_email = row["email"]
+            emp_name     = row["name"]
+    except Exception:
+        pass
+
+    from agent.nodes import _send_email
+    subject = f"IT Support Assistant — Response for {emp_name}"
+    body = (
+        f"Hello {emp_name},\n\n"
+        f"Here is your IT Support Assistant response:\n\n"
+        f"{content}\n\n"
+        f"---\nTechCorp IT Support System"
+    )
+    return _send_email(target_email, subject, body)
 
 
 def get_agent_graph():
@@ -442,6 +593,14 @@ def render_sidebar():
             st.session_state.show_db_admin = True
             st.session_state.db_admin_mode = "delete"
             st.rerun()
+        if st.button("✏️ Update DB Records", use_container_width=True):
+            st.session_state.show_db_admin = True
+            st.session_state.db_admin_mode = "update"
+            st.rerun()
+        if st.button("✅ Pending Approvals", use_container_width=True):
+            st.session_state.show_db_admin = True
+            st.session_state.db_admin_mode = "approvals"
+            st.rerun()
 
         st.divider()
 
@@ -491,13 +650,35 @@ def render_sidebar():
         st.markdown("### 💬 Quick Prompts")
         # Each entry: (button label shown, message sent to agent, optional forced employee ID)
         quick_prompts = [
-            ("How do I reset my VPN password?", "How do I reset my VPN password?", None),
-            ("Check my ticket status", f"Check ticket status for {AUTHOR_EMP_ID}", AUTHOR_EMP_ID),
-            ("Show all employee tickets", "Show all tickets for all employees", None),
-            ("My laptop is slow — raise a ticket", "My laptop is very slow and hanging. Please raise a support ticket.", AUTHOR_EMP_ID),
-            ("How do I set up MFA?", "How do I set up MFA on my phone?", None),
-            ("I can't access the CRM system", "I can't access the CRM system. Getting a 403 error.", None),
-            ("Register a new employee", "I need to register a new employee in the system.", None),
+            # Knowledge — instant, no state needed
+            ("🔑 How to reset VPN password",
+             "How do I reset my VPN password? Give me step-by-step instructions.",
+             None),
+            ("📱 How to set up MFA",
+             "How do I set up MFA on my phone? Give me step-by-step guide.",
+             None),
+            # Ticket lookup — includes EMP ID, goes direct
+            (f"🎫 My tickets ({AUTHOR_EMP_ID})",
+             f"Show all tickets for employee ID {AUTHOR_EMP_ID}.",
+             AUTHOR_EMP_ID),
+            ("🏢 Show all employee tickets",
+             "Show all tickets for all employees.",
+             None),
+            # Ticket creation — fully pre-filled, goes straight to confirmation
+            (f"💻 Laptop slow — raise ticket",
+             (f"My employee ID is {AUTHOR_EMP_ID}. My laptop has been very slow for 2 days — "
+              f"apps freeze frequently and boot takes over 10 minutes. "
+              f"Category: Laptop, Priority: High. Please raise a support ticket."),
+             AUTHOR_EMP_ID),
+            (f"🔒 VPN issue — raise ticket",
+             (f"My employee ID is {AUTHOR_EMP_ID}. VPN keeps disconnecting every 15 minutes "
+              f"while working from home, disrupting meetings. "
+              f"Category: VPN, Priority: High. Please raise a ticket."),
+             AUTHOR_EMP_ID),
+            # Registration — one-line format, goes straight to confirmation
+            ("👤 Register new employee",
+             "Register new employee: Jane Smith, jane.smith@techcorp.com, Engineering, Carol Davis",
+             None),
         ]
         for label, message, forced_emp_id in quick_prompts:
             if st.button(label, key=f"qp_{label[:20]}", use_container_width=True):
@@ -524,16 +705,106 @@ def render_db_admin_panel():
 
     st.markdown("### 🗄️ Database Details")
     mode = st.session_state.get("db_admin_mode", "view")
-    st.caption("View all rows in DB. Use delete mode to select and remove specific rows.")
 
-    employees_count, tickets_count, email_dispatch_count = _db_counts()
-    c1, c2, c3 = st.columns(3)
+    employees_count, tickets_count, email_dispatch_count, approvals_count = _db_counts()
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.metric("Employees", employees_count)
     with c2:
         st.metric("Tickets", tickets_count)
     with c3:
         st.metric("Email Dispatches", email_dispatch_count)
+    with c4:
+        st.metric("Pending Approvals", approvals_count)
+
+    db_msg = st.session_state.get("db_admin_message")
+    if db_msg:
+        level, text = db_msg
+        if level == "success":
+            st.success(text)
+        else:
+            st.error(text)
+        st.session_state.db_admin_message = None
+
+    if mode == "update":
+        st.markdown("#### ✏️ Update Employee Record")
+        emp_rows = _fetch_db_rows("employees")
+        if not emp_rows:
+            st.info("No employees found.")
+            return
+        emp_id_select = st.selectbox(
+            "Select Employee to Edit",
+            [r["employee_id"] for r in emp_rows],
+            key="update_emp_select",
+        )
+        emp_row = next((r for r in emp_rows if r["employee_id"] == emp_id_select), None)
+        if emp_row:
+            with st.form("update_employee_form"):
+                st.caption(f"Editing: **{emp_id_select}**")
+                new_name    = st.text_input("Name",        value=emp_row.get("name", ""))
+                new_email   = st.text_input("Email",       value=emp_row.get("email", ""))
+                new_dept    = st.text_input("Department",  value=emp_row.get("department", ""))
+                new_role    = st.text_input("Role",        value=emp_row.get("role", "Employee"))
+                new_manager = st.text_input("Manager Name",value=emp_row.get("manager_name", "N/A"))
+                new_status  = st.selectbox(
+                    "Status",
+                    ["Active", "Inactive"],
+                    index=0 if emp_row.get("status", "Active") == "Active" else 1,
+                )
+                submitted = st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True)
+            if submitted:
+                updates = {
+                    "name": new_name.strip(), "email": new_email.strip(),
+                    "department": new_dept.strip(), "role": new_role.strip(),
+                    "manager_name": new_manager.strip(), "status": new_status,
+                }
+                ok, msg = _update_employee_record(emp_id_select, updates)
+                st.session_state.db_admin_message = ("success" if ok else "error", msg)
+                st.rerun()
+        return
+
+    if mode == "approvals":
+        st.markdown("#### ✅ Pending Approvals — Admin Review")
+        approval_rows = _fetch_db_rows("pending_approvals")
+        pending_rows  = [r for r in approval_rows if r.get("status") == "Pending"]
+
+        if not pending_rows:
+            st.success("✅ No pending approvals — all caught up!")
+        else:
+            st.warning(f"⏳ {len(pending_rows)} request(s) awaiting approval")
+
+        st.dataframe(approval_rows, use_container_width=True, hide_index=True)
+
+        if pending_rows:
+            st.markdown("**Manually Approve / Reject:**")
+            selected_approval = st.selectbox(
+                "Select request",
+                [r["approval_id"][:16] + "…  |  " + r["request_type"] + "  |  " + r["employee_id"]
+                 for r in pending_rows],
+                key="approval_select",
+            )
+            sel_idx = [r["approval_id"][:16] + "…  |  " + r["request_type"] + "  |  " + r["employee_id"]
+                       for r in pending_rows].index(selected_approval)
+            sel_row = pending_rows[sel_idx]
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("✅ Approve & Execute", type="primary", use_container_width=True):
+                    ok, msg = _execute_approved_action(sel_row)
+                    _update_approval_status(sel_row["approval_id"], "Approved" if ok else "Failed", msg)
+                    st.session_state.db_admin_message = (
+                        "success" if ok else "error",
+                        f"{'Approved' if ok else 'Failed'}: {msg[:200]}"
+                    )
+                    st.rerun()
+            with col_b:
+                if st.button("❌ Reject", use_container_width=True):
+                    _update_approval_status(sel_row["approval_id"], "Rejected", "Rejected by admin")
+                    st.session_state.db_admin_message = ("success", f"Rejected: {sel_row['approval_id'][:16]}…")
+                    st.rerun()
+        return
+
+    st.caption("View all rows in DB. Use delete mode to select and remove specific rows.")
 
     table_name = st.selectbox(
         "Select table",
@@ -578,14 +849,6 @@ def render_db_admin_panel():
         st.session_state.db_admin_message = ("success" if ok else "error", msg)
         st.rerun()
 
-    db_msg = st.session_state.get("db_admin_message")
-    if db_msg:
-        level, text = db_msg
-        if level == "success":
-            st.success(text)
-        else:
-            st.error(text)
-
 
 # ── Main Chat Interface ───────────────────────────────────────────────────────
 def render_main():
@@ -623,9 +886,22 @@ def render_main():
             - *"Delete employee EMP1025 (deactivate)"*
             """)
         else:
-            for msg in st.session_state.messages:
+            for i, msg in enumerate(st.session_state.messages):
                 with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🤖"):
                     st.markdown(msg["content"])
+                    if msg["role"] == "assistant":
+                        agent_state = st.session_state.get("agent_state")
+                        emp_id = (agent_state.employee_id if agent_state else None) or AUTHOR_EMP_ID
+                        if st.button(
+                            "📧 Email this response",
+                            key=f"email_resp_{i}",
+                            help="Send this response to your registered email address",
+                        ):
+                            ok, err = _send_response_email(msg["content"], emp_id)
+                            if ok:
+                                st.success("✅ Response sent to your registered email!")
+                            else:
+                                st.error(f"⚠️ Could not send email: {err}")
 
     # Handle quick prompt from sidebar
     pending_prompt = st.session_state.pop("pending_quick_prompt", None)
@@ -660,10 +936,105 @@ def render_main():
         st.rerun()
 
 
+def render_approval_callback() -> None:
+    """
+    Dedicated page for admin approve/reject email callbacks.
+    Triggered when the app URL contains ?approve=TOKEN or ?reject=TOKEN.
+    """
+    params  = st.query_params
+    token   = params.get("approve") or params.get("reject")
+    is_approve = "approve" in params
+
+    st.markdown("""
+    <div class="main-header">
+        <h1>🔐 IT Support — Admin Approval Portal</h1>
+        <p>TechCorp IT Support System</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not token:
+        st.error("❌ Invalid request — no approval token found.")
+        return
+
+    approval = _get_pending_approval(token)
+    if not approval:
+        st.error("❌ Invalid or expired approval link. The request may have already been processed.")
+        return
+
+    if approval["status"] != "Pending":
+        icon = "✅" if approval["status"] == "Approved" else "❌"
+        st.info(
+            f"{icon} This request was already **{approval['status']}** "
+            f"on {(approval.get('resolved_at') or '')[:10]}."
+        )
+        if approval.get("result_message"):
+            st.markdown("**Result:**")
+            st.markdown(approval["result_message"][:500])
+        return
+
+    import json as _json
+    request_data = _json.loads(approval.get("request_data", "{}"))
+
+    st.markdown("### 📋 Request Details")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Request Type",  approval["request_type"].replace("_", " ").title())
+        st.metric("Employee ID",   approval["employee_id"])
+    with col2:
+        st.metric("Employee Name", approval["employee_name"])
+        st.metric("Requested",     (approval["requested_at"] or "")[:16])
+
+    st.markdown("**Request Data:**")
+    st.json(request_data)
+
+    btn_type = "primary" if is_approve else "secondary"
+
+    st.divider()
+    if st.button(
+        f"{'✅ Approve & Execute' if is_approve else '❌ Reject Request'}",
+        type=btn_type,
+        use_container_width=True,
+    ):
+        if is_approve:
+            with st.spinner("Executing approved action…"):
+                ok, msg = _execute_approved_action(approval)
+            _update_approval_status(token, "Approved" if ok else "Failed", msg)
+            if ok:
+                st.success(f"✅ **Approved & Executed**\n\n{msg[:400]}")
+            else:
+                st.error(f"❌ Execution failed: {msg}")
+        else:
+            _update_approval_status(token, "Rejected", "Rejected by admin via email link")
+            # Notify employee
+            if approval.get("employee_email"):
+                from agent.nodes import _send_email
+                _send_email(
+                    approval["employee_email"],
+                    f"IT Support — Your {approval['request_type'].replace('_',' ').title()} Request Rejected",
+                    f"Hello {approval.get('employee_name','Employee')},\n\n"
+                    f"Your IT support request ({approval['request_type'].replace('_',' ').title()}) "
+                    f"has been rejected by the IT Admin.\n\nPlease contact IT helpdesk for more information.\n\n"
+                    f"---\nTechCorp IT Support System",
+                )
+            st.warning("❌ Request rejected. Employee has been notified.")
+
+    st.divider()
+    if st.button("🏠 Go to IT Support Assistant", use_container_width=True):
+        st.query_params.clear()
+        st.rerun()
+
+
 # ── Entry Point ───────────────────────────────────────────────────────────────
 def main():
     init_session_state()
     ensure_db()
+
+    # Handle admin approval/rejection callbacks from email links
+    params = st.query_params
+    if "approve" in params or "reject" in params:
+        render_approval_callback()
+        return
+
     render_sidebar()
     render_main()
 

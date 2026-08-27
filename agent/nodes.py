@@ -264,6 +264,84 @@ def _queue_vpn_email_dispatches(employee_id: str, employee_email: str, employee_
         return False, "Dispatch queue failed"
 
 
+def _send_admin_approval_email(
+    request_type: str,
+    approval_id: str,
+    employee_id: str,
+    employee_email: str,
+    employee_name: str,
+    summary: str,
+) -> tuple[bool, str]:
+    """Send approval-request email to IT admin with approve/reject links."""
+    admin_email = os.getenv("ADMIN_EMAIL", "helloajay21@gmail.com").strip()
+    app_base_url = os.getenv("APP_BASE_URL", "http://localhost:8501").rstrip("/")
+    approve_url = f"{app_base_url}/?approve={approval_id}"
+    reject_url  = f"{app_base_url}/?reject={approval_id}"
+    subject = (
+        f"[IT Support] Approval Required: "
+        f"{request_type.replace('_', ' ').title()} — {employee_id}"
+    )
+    body = (
+        f"Hello Admin,\n\n"
+        f"An IT support request needs your approval:\n\n"
+        f"Request Type : {request_type.replace('_', ' ').title()}\n"
+        f"Employee ID  : {employee_id}\n"
+        f"Employee     : {employee_name}\n"
+        f"Email        : {employee_email}\n"
+        f"Requested at : {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}\n\n"
+        f"Details:\n{summary}\n\n"
+        f"{'─'*50}\n\n"
+        f"✅ APPROVE (click to execute):\n{approve_url}\n\n"
+        f"❌ REJECT  (click to cancel):\n{reject_url}\n\n"
+        f"{'─'*50}\n"
+        f"TechCorp IT Support System (automated)"
+    )
+    return _send_email(admin_email, subject, body, admin_email=None)
+
+
+def _create_pending_approval(
+    request_type: str,
+    employee_id: str,
+    employee_email: str,
+    employee_name: str,
+    request_data: dict,
+    summary: str,
+) -> tuple[bool, str]:
+    """
+    Persist a pending approval in the DB and email the admin.
+    Returns (success, approval_id_or_error).
+    VPN setup is intentionally excluded — it executes directly.
+    """
+    approval_id = secrets.token_urlsafe(24)
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO pending_approvals
+            (approval_id, request_type, employee_id, employee_email, employee_name,
+             request_data, status, requested_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?)
+            """,
+            (approval_id, request_type, employee_id, employee_email or "",
+             employee_name or "", json.dumps(request_data), datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.error("Failed to store pending approval: %s", exc)
+        return False, f"DB error storing approval: {exc}"
+
+    sent_ok, send_msg = _send_admin_approval_email(
+        request_type, approval_id, employee_id,
+        employee_email or "", employee_name or "", summary,
+    )
+    if not sent_ok:
+        logger.warning("Approval stored (ID=%s) but admin email failed: %s", approval_id, send_msg)
+        return True, f"{approval_id}|EMAIL_FAILED:{send_msg}"
+    return True, approval_id
+
+
 # ------------------------------------------------------------------
 # System Prompt
 # ------------------------------------------------------------------
@@ -1108,28 +1186,53 @@ Respond in JSON only: {{"title": "...", "description": "...", "category": "...",
         logger.info("Auto-registration succeeded for %s", state.employee_id)
         pending["auto_reg_result"] = reg_result  # Carry result into final response
 
-    # ── Step 5: Create the ticket ─────────────────────────────────────────────
-    try:
-        result = ticket_creation.invoke({
-            "employee_id": state.employee_id,
-            "title": pending.get("title", "IT Support Request"),
-            "description": pending.get("description", ""),
-            "category": pending.get("category", "Other"),
-            "priority": pending.get("priority", "Medium"),
-        })
-        logger.info("Ticket creation completed for: %s", state.employee_id)
+    # ── Step 5: Submit for admin approval (admin must approve before ticket is created) ──
+    emp_profile = _employee_profile(state.employee_id)
+    emp_email   = emp_profile.get("email", "")
+    emp_name    = emp_profile.get("name", state.employee_name or state.employee_id)
 
-        # Prepend auto-registration success note if applicable
-        if pending.get("auto_reg_result"):
-            result = (
-                f"✅ **Employee Registered & Ticket Created**\n\n"
-                f"**Registration:**\n{pending['auto_reg_result']}\n\n"
-                f"---\n\n"
-                f"**Ticket:**\n{result}"
+    request_data = {
+        "employee_id" : state.employee_id,
+        "title"       : pending.get("title", "IT Support Request"),
+        "description" : pending.get("description", ""),
+        "category"    : pending.get("category", "Other"),
+        "priority"    : pending.get("priority", "Medium"),
+    }
+    summary = (
+        f"Title      : {request_data['title']}\n"
+        f"Category   : {request_data['category']}\n"
+        f"Priority   : {request_data['priority']}\n"
+        f"Description: {request_data['description']}"
+    )
+
+    ok, approval_msg = _create_pending_approval(
+        "TICKET_CREATION", state.employee_id, emp_email, emp_name, request_data, summary,
+    )
+
+    if ok:
+        email_note = ""
+        if "EMAIL_FAILED" in approval_msg:
+            email_note = (
+                f"\n\n⚠️ Admin notification email could not be sent "
+                f"({approval_msg.split('EMAIL_FAILED:')[-1]}). "
+                f"The admin can still approve from the DB Admin panel."
             )
-    except Exception as e:
-        logger.error("Ticket creation tool error: %s", e)
-        result = "❌ Error: Failed to create ticket. Please try again or contact IT helpdesk."
+        result = (
+            f"✅ **Ticket Request Submitted for Admin Approval**\n\n"
+            f"| Field | Value |\n|-------|-------|\n"
+            f"| 📋 Title | {request_data['title']} |\n"
+            f"| 🏷️ Category | {request_data['category']} |\n"
+            f"| ⚡ Priority | {request_data['priority']} |\n"
+            f"| 👤 Employee | {emp_name} ({state.employee_id}) |\n\n"
+            f"📧 An approval email has been sent to the IT Admin. Once approved, "
+            f"the ticket will be created and you'll receive a confirmation at **{emp_email}**."
+            f"{email_note}"
+        )
+    else:
+        result = (
+            f"❌ Failed to submit ticket for approval: {approval_msg}\n\n"
+            f"Please try again or contact IT helpdesk directly."
+        )
 
     return {
         "tool_output": result,
@@ -1228,14 +1331,37 @@ def employee_deletion_node(state: AgentState) -> dict:
             "tool_output": None,
         }
 
-    try:
-        result = delete_employee.invoke({
-            "employee_id": pending["employee_id"],
-            "hard_delete": bool(pending.get("hard_delete", False)),
-        })
-    except Exception as exc:
-        logger.error("employee_deletion tool error: %s", exc)
-        result = "❌ Failed to process employee deletion request."
+    emp_profile = _employee_profile(pending["employee_id"])
+    emp_email   = emp_profile.get("email", "")
+    emp_name    = emp_profile.get("name", pending["employee_id"])
+    action_label = "Hard Delete (employee + tickets)" if pending["hard_delete"] else "Deactivate (keep tickets)"
+
+    request_data = {
+        "employee_id" : pending["employee_id"],
+        "hard_delete" : bool(pending.get("hard_delete", False)),
+        "action"      : action_label,
+    }
+    summary = f"Action: {action_label}\nEmployee: {emp_name} ({pending['employee_id']})\nEmail: {emp_email}"
+
+    ok, approval_msg = _create_pending_approval(
+        "EMPLOYEE_DELETION", pending["employee_id"], emp_email, emp_name, request_data, summary,
+    )
+
+    if ok:
+        email_note = ""
+        if "EMAIL_FAILED" in approval_msg:
+            email_note = f"\n\n⚠️ Admin email failed: {approval_msg.split('EMAIL_FAILED:')[-1]}"
+        result = (
+            f"✅ **Employee Deletion Submitted for Admin Approval**\n\n"
+            f"  🆔 **Employee ID** : {pending['employee_id']}\n"
+            f"  👤 **Name**        : {emp_name}\n"
+            f"  🗑️ **Action**      : {action_label}\n\n"
+            f"📧 The IT Admin will receive an approval email. "
+            f"Once approved, the action will be executed."
+            f"{email_note}"
+        )
+    else:
+        result = f"❌ Failed to submit deletion for approval: {approval_msg}"
 
     return {
         "tool_output": result,
@@ -1500,32 +1626,45 @@ def employee_registration_node(state: AgentState) -> dict:
             "tool_output": None,
         }
 
-    # ── Execute registration ───────────────────────────────────────────────────
-    try:
-        result = create_employee.invoke({
-            "name": pending.get("name", ""),
-            "email": pending.get("email", ""),
-            "department": pending.get("department", ""),
-            "manager_name": pending.get("manager_name", "N/A"),
-            "role": pending.get("role", "Employee"),
-        })
-        logger.info("Employee registration completed: %s", pending.get("name"))
-    except Exception as exc:
-        logger.error("create_employee tool error: %s", exc)
-        result = "❌ Error: Failed to register employee. Please try again or contact the system administrator."
+    # ── Submit for admin approval ─────────────────────────────────────────────
+    request_data = {
+        "name"        : pending.get("name", ""),
+        "email"       : pending.get("email", ""),
+        "department"  : pending.get("department", ""),
+        "manager_name": pending.get("manager_name", "N/A"),
+        "role"        : pending.get("role", "Employee"),
+    }
+    summary = "\n".join(f"{k.replace('_',' ').title()}: {v}" for k, v in request_data.items())
 
-    # Persist created employee identity in conversation state so subsequent
-    # ticket actions use the newly created employee without asking again.
-    created_emp_id = None
-    if isinstance(result, str):
-        m = re.search(r"\bEMP\d{4,}\b", result, re.IGNORECASE)
-        if m:
-            created_emp_id = m.group(0).upper()
+    ok, approval_msg = _create_pending_approval(
+        "EMPLOYEE_REGISTRATION",
+        "NEW",
+        pending.get("email", ""),
+        pending.get("name", "New Employee"),
+        request_data,
+        summary,
+    )
+
+    if ok:
+        email_note = ""
+        if "EMAIL_FAILED" in approval_msg:
+            email_note = f"\n\n⚠️ Admin email failed: {approval_msg.split('EMAIL_FAILED:')[-1]}"
+        result = (
+            f"✅ **Employee Registration Submitted for Admin Approval**\n\n"
+            f"  👤 **Name**       : {request_data['name']}\n"
+            f"  📧 **Email**      : {request_data['email']}\n"
+            f"  🏢 **Department** : {request_data['department']}\n"
+            f"  👔 **Manager**    : {request_data['manager_name']}\n"
+            f"  💼 **Role**       : {request_data['role']}\n\n"
+            f"📧 The IT Admin will receive an approval email. Once approved, "
+            f"the employee will be registered and notified at **{request_data['email']}**."
+            f"{email_note}"
+        )
+    else:
+        result = f"❌ Failed to submit registration for approval: {approval_msg}"
 
     return {
         "tool_output": result,
-        "employee_id": created_emp_id or state.employee_id,
-        "employee_name": pending.get("name", state.employee_name),
         "pending_employee": None,
         "awaiting_info": False,
         "awaiting_field": None,
