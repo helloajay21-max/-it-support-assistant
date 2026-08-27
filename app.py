@@ -445,6 +445,48 @@ def render_sidebar():
 
         st.divider()
 
+        # ── Send VPN Setup Email (direct, no conversation loop) ──
+        st.markdown("### 📧 Send VPN Setup Email")
+        st.caption("Directly send the VPN setup email with temporary password — no back-and-forth needed.")
+
+        vpn_emp_id_input = st.text_input(
+            "Employee ID",
+            value=AUTHOR_EMP_ID,
+            key="vpn_email_emp_id",
+            placeholder="e.g. EMP1025",
+        )
+        if st.button("📤 Send VPN Setup Email with Password", use_container_width=True, type="primary", key="send_vpn_email_btn"):
+            emp_id_clean = (vpn_emp_id_input or "").strip().upper()
+            if not emp_id_clean or not emp_id_clean.startswith("EMP"):
+                st.error("❌ Please enter a valid Employee ID (e.g. EMP1025).")
+            else:
+                try:
+                    from data.init_db import get_db_connection as _get_conn
+                    _conn = _get_conn()
+                    _cursor = _conn.cursor()
+                    _cursor.execute(
+                        "SELECT name, email FROM employees WHERE employee_id = ?", (emp_id_clean,)
+                    )
+                    _row = _cursor.fetchone()
+                    _conn.close()
+                except Exception:
+                    _row = None
+
+                if not _row:
+                    st.error(f"❌ Employee **{emp_id_clean}** not found in the database.")
+                else:
+                    _emp_name = _row["name"]
+                    _emp_email = _row["email"]
+                    with st.spinner(f"Sending VPN setup email to {_emp_email}…"):
+                        from agent.nodes import _queue_vpn_email_dispatches
+                        _ok, _msg = _queue_vpn_email_dispatches(emp_id_clean, _emp_email, _emp_name)
+                    if _ok:
+                        st.success(f"✅ VPN setup + password reset emails sent to **{_emp_email}**.")
+                    else:
+                        st.error(f"⚠️ Email dispatch failed: {_msg}")
+
+        st.divider()
+
         # ── Quick Prompts — clean labels, personalized messages ──
         st.markdown("### 💬 Quick Prompts")
         # Each entry: (button label shown, message sent to agent, optional forced employee ID)
