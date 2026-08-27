@@ -31,6 +31,9 @@ ADMIN_NAME = "Ajay Kumar"
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "helloajay21@gmail.com").strip().lower()
 ADMIN_EMP_ID = "EMP1025"
 DEFAULT_EMPLOYEE_ID = ADMIN_EMP_ID
+OWNER_NAME = "Ajay Kumar"
+OWNER_EMAIL = "helloajay21@gmail.com"
+OWNER_BATCH = "Batch 1"
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
 # ── Page Configuration ────────────────────────────────────────────────────────
@@ -454,6 +457,16 @@ def render_auth_page() -> None:
                     st.success(f"✅ Account created successfully. Your Employee ID is {msg}. You can now log in.")
                 else:
                     st.error(msg)
+
+    st.markdown(
+        f"""
+        <div style="margin-top: 1rem; text-align: center; color: #475569; font-size: 0.88rem;">
+            © {datetime.now().year} <strong>{PROJECT_NAME}</strong><br/>
+            Owner: <strong>{OWNER_NAME}</strong> · {OWNER_EMAIL} · {OWNER_BATCH}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _fetch_db_rows(table_name: str) -> list[dict]:
