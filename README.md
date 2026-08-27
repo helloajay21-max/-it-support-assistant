@@ -213,6 +213,7 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 | `LOG_LEVEL` | ❌ | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`) |
 | `ENABLE_FILE_LOG` | ❌ | `false` | Write logs to `logs/` directory |
 | `ADMIN_EMAIL` | ❌ | `helloajay21@gmail.com` | Admin inbox for approval notifications; only this admin can approve or reject requests in the dashboard |
+| `ADMIN_PASSWORD` | ❌ | _(empty)_ | Admin login password used for Ajay Kumar's secure approval access |
 
 ### SMTP Settings (for real VPN email delivery)
 
@@ -276,6 +277,7 @@ Add these **Secrets**:
 | `WEBAPP_NAME` | Azure App Service web app name |
 | `OPENAI_API_KEY` | OpenAI API key used by the assistant |
 | `ADMIN_EMAIL` | Admin inbox for approval links and VPN copy emails |
+| `ADMIN_PASSWORD` | Admin login password for Ajay Kumar |
 | `SMTP_HOST` | SMTP host, e.g. `smtp.gmail.com` |
 | `SMTP_PORT` | SMTP port, e.g. `587` |
 | `SMTP_USERNAME` | SMTP login username |
@@ -288,6 +290,7 @@ Add these **Secrets**:
 The deployment workflow applies the runtime configuration on every push to `main`, including:
 - persistent App Service storage (`WEBSITES_ENABLE_APP_SERVICE_STORAGE=true`)
 - SQLite path (`/home/data/tickets.db`)
+- secure admin login via `ADMIN_PASSWORD`
 - SMTP and VPN notification settings
 
 ### Step 4 — Push to GitHub to Trigger Deployment

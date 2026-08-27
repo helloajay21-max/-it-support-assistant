@@ -15,6 +15,7 @@ from data.init_db import get_db_connection
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+ADMIN_EMPLOYEE_ID = "EMP1025"
 
 
 @tool
@@ -33,6 +34,8 @@ def delete_employee(employee_id: str, hard_delete: bool = False) -> str:
     employee_id = (employee_id or "").strip().upper()
     if not re.match(r"^EMP\d{4,}$", employee_id):
         return f"❌ Invalid employee ID '{employee_id}'. Expected format EMP####."
+    if employee_id == ADMIN_EMPLOYEE_ID:
+        return "❌ Ajay Kumar's admin profile is protected and cannot be deleted or deactivated."
 
     try:
         conn = get_db_connection()
@@ -45,6 +48,9 @@ def delete_employee(employee_id: str, hard_delete: bool = False) -> str:
         if not row:
             conn.close()
             return f"❌ Employee `{employee_id}` does not exist in the database."
+        if row["employee_id"] == ADMIN_EMPLOYEE_ID:
+            conn.close()
+            return "❌ Ajay Kumar's admin profile is protected and cannot be deleted or deactivated."
 
         employee_name = row["name"]
 

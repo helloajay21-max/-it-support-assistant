@@ -12,6 +12,7 @@ Go to: GitHub Repo → Settings → Secrets and variables → Actions → New re
 | `WEBAPP_NAME` | your Azure App Service web app name |
 | `OPENAI_API_KEY` | `sk-...` |
 | `ADMIN_EMAIL` | admin inbox that receives approval links and VPN copy emails, e.g. `helloajay21@gmail.com` |
+| `ADMIN_PASSWORD` | admin login password for Ajay Kumar; required for secure admin login |
 | `APP_BASE_URL` | Full URL of your Azure web app, e.g. `https://your-webapp.azurewebsites.net` |
 | `SMTP_HOST` | `smtp.gmail.com` or your SMTP server |
 | `SMTP_PORT` | `587` |

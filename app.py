@@ -4,6 +4,7 @@ Provides a chat interface with conversation history and tool visibility.
 """
 
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -19,6 +20,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(__file__))
 
 from data.init_db import get_db_connection, init_db
+from utils.auth import hash_password, validate_username, verify_password
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,6 +30,7 @@ ADMIN_NAME = "Ajay Kumar"
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "helloajay21@gmail.com").strip().lower()
 ADMIN_EMP_ID = "EMP1025"
 DEFAULT_EMPLOYEE_ID = ADMIN_EMP_ID
+EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -123,7 +126,9 @@ def init_session_state():
         "show_db_admin": False,
         "db_admin_mode": "view",
         "db_admin_message": None,
-        "current_employee_id": DEFAULT_EMPLOYEE_ID,
+        "authenticated": False,
+        "current_employee_id": None,
+        "auth_username": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -180,28 +185,21 @@ def _get_all_employee_profiles() -> list[dict]:
 
 def _get_current_employee_profile() -> dict:
     """Resolve the active employee for this Streamlit session."""
-    employee_id = st.session_state.get("current_employee_id") or DEFAULT_EMPLOYEE_ID
+    employee_id = st.session_state.get("current_employee_id")
+    if not employee_id:
+        return {}
     profile = _get_employee_profile(employee_id)
     if profile:
         return profile
-    fallback = _get_employee_profile(DEFAULT_EMPLOYEE_ID)
-    if fallback:
-        st.session_state.current_employee_id = fallback["employee_id"]
-        return fallback
-    return {
-        "employee_id": DEFAULT_EMPLOYEE_ID,
-        "name": ADMIN_NAME,
-        "email": ADMIN_EMAIL,
-        "department": "IT",
-        "role": "Admin",
-        "manager_name": "N/A",
-        "status": "Active",
-    }
+    st.session_state.current_employee_id = None
+    return {}
 
 
 def _current_user_is_admin() -> bool:
     """Return True only for Ajay Kumar's admin profile."""
     profile = _get_current_employee_profile()
+    if not st.session_state.get("authenticated"):
+        return False
     return (
         profile.get("employee_id") == ADMIN_EMP_ID
         and (profile.get("name") or "").strip().lower() == ADMIN_NAME.lower()
@@ -209,11 +207,255 @@ def _current_user_is_admin() -> bool:
     )
 
 
+def _next_employee_id(cursor) -> str:
+    """Generate the next sequential employee ID."""
+    cursor.execute("SELECT MAX(CAST(SUBSTR(employee_id, 4) AS INTEGER)) FROM employees")
+    row = cursor.fetchone()
+    last_num = row[0] if row and row[0] is not None else 1000
+    return f"EMP{last_num + 1}"
+
+
+def _password_validation_error(password: str) -> str:
+    """Return a human-readable password validation error, or empty string."""
+    password = password or ""
+    if len(password) < 8:
+        return "Password must be at least 8 characters."
+    if not re.search(r"[A-Z]", password):
+        return "Password must include at least one uppercase letter."
+    if not re.search(r"[a-z]", password):
+        return "Password must include at least one lowercase letter."
+    if not re.search(r"\d", password):
+        return "Password must include at least one number."
+    return ""
+
+
+def _create_user_account(
+    name: str,
+    email: str,
+    department: str,
+    manager_name: str,
+    username: str,
+    password: str,
+) -> tuple[bool, str]:
+    """Create or activate a normal user account with a hashed password."""
+    name = (name or "").strip()
+    email = (email or "").strip().lower()
+    department = (department or "").strip()
+    manager_name = (manager_name or "").strip()
+    username = (username or "").strip().lower()
+
+    if len(name) < 2:
+        return False, "Name must be at least 2 characters."
+    if not EMAIL_RE.match(email):
+        return False, "Please enter a valid email address."
+    if len(department) < 2:
+        return False, "Department is required."
+    if len(manager_name) < 2:
+        return False, "Manager name is required."
+    if not validate_username(username):
+        return False, "Username must be 4-40 characters and use only letters, numbers, dot, underscore, or hyphen."
+    password_error = _password_validation_error(password)
+    if password_error:
+        return False, password_error
+    if email == ADMIN_EMAIL or username == ADMIN_EMAIL:
+        return False, "This admin account is reserved."
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT employee_id FROM employees WHERE LOWER(username) = LOWER(?)", (username,))
+        existing_username = cursor.fetchone()
+        if existing_username:
+            conn.close()
+            return False, "That username is already taken."
+
+        cursor.execute("SELECT * FROM employees WHERE LOWER(email) = LOWER(?)", (email,))
+        existing_employee = cursor.fetchone()
+        password_hash = hash_password(password)
+
+        if existing_employee:
+            existing_employee = dict(existing_employee)
+            if existing_employee.get("is_admin"):
+                conn.close()
+                return False, "This admin account cannot be changed through sign up."
+            if existing_employee.get("password_hash"):
+                conn.close()
+                return False, "An account already exists for this email. Please log in."
+
+            cursor.execute(
+                """
+                UPDATE employees
+                SET name = ?, department = ?, manager_name = ?, username = ?, password_hash = ?, role = COALESCE(NULLIF(role, ''), 'Employee'), status = 'Active', is_admin = 0
+                WHERE employee_id = ?
+                """,
+                (
+                    name,
+                    department,
+                    manager_name,
+                    username,
+                    password_hash,
+                    existing_employee["employee_id"],
+                ),
+            )
+            employee_id = existing_employee["employee_id"]
+        else:
+            employee_id = _next_employee_id(cursor)
+            cursor.execute(
+                """
+                INSERT INTO employees
+                (employee_id, name, email, department, role, manager_name, status, created_at, username, password_hash, is_admin)
+                VALUES (?, ?, ?, ?, 'Employee', ?, 'Active', ?, ?, ?, 0)
+                """,
+                (
+                    employee_id,
+                    name,
+                    email,
+                    department,
+                    manager_name,
+                    datetime.now().isoformat(),
+                    username,
+                    password_hash,
+                ),
+            )
+
+        conn.commit()
+        conn.close()
+        return True, employee_id
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Account signup failed: %s", exc, exc_info=True)
+        return False, "Could not create the account right now."
+
+
+def _login_user(identifier: str, password: str) -> tuple[bool, str]:
+    """Authenticate a user by username or email."""
+    identifier = (identifier or "").strip().lower()
+    if not identifier or not password:
+        return False, "Enter both username/email and password."
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT employee_id, name, email, username, password_hash, status, is_admin
+            FROM employees
+            WHERE LOWER(COALESCE(username, '')) = LOWER(?) OR LOWER(email) = LOWER(?)
+            LIMIT 1
+            """,
+            (identifier, identifier),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return False, "Invalid username/email or password."
+
+        profile = dict(row)
+        if profile.get("status") != "Active":
+            return False, "This account is inactive. Please contact the admin."
+        if not profile.get("password_hash"):
+            return False, "This account does not have a password yet. Please use Sign Up to activate it."
+        if not verify_password(password, profile["password_hash"]):
+            return False, "Invalid username/email or password."
+
+        st.session_state.authenticated = True
+        st.session_state.current_employee_id = profile["employee_id"]
+        st.session_state.auth_username = profile.get("username") or profile["email"]
+        _reset_conversation_state()
+        return True, profile["employee_id"]
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Login failed: %s", exc, exc_info=True)
+        return False, "Login failed due to a system error."
+
+
+def _logout_user() -> None:
+    """Clear login state for the current session."""
+    _reset_conversation_state()
+    st.session_state.authenticated = False
+    st.session_state.current_employee_id = None
+    st.session_state.auth_username = None
+    st.session_state.show_db_admin = False
+    st.session_state.db_admin_mode = "view"
+
+
+def render_auth_page() -> None:
+    """Render login and self-signup for multi-user access."""
+    st.markdown(f"""
+    <div class="main-header">
+        <h1>🖥️ {PROJECT_NAME}</h1>
+        <p>Secure multi-user access for IT support operations</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if "approve" in st.query_params or "reject" in st.query_params:
+        st.info(f"Login as {ADMIN_NAME} to review this approval request.")
+
+    admin_password_configured = False
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT password_hash FROM employees WHERE employee_id = ?", (ADMIN_EMP_ID,))
+        admin_row = cursor.fetchone()
+        conn.close()
+        admin_password_configured = bool(admin_row and admin_row["password_hash"])
+    except Exception:
+        admin_password_configured = False
+
+    if not admin_password_configured:
+        st.warning("Admin login password is not configured yet. Set ADMIN_PASSWORD in environment/GitHub Secrets for Ajay admin login.")
+
+    login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
+
+    with login_tab:
+        with st.form("login_form", clear_on_submit=False):
+            identifier = st.text_input("Username or email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("🔐 Login", type="primary", use_container_width=True)
+        if submitted:
+            ok, msg = _login_user(identifier, password)
+            if ok:
+                st.success("✅ Login successful.")
+                st.rerun()
+            st.error(msg)
+
+    with signup_tab:
+        with st.form("signup_form", clear_on_submit=False):
+            name = st.text_input("Full name")
+            email = st.text_input("Email")
+            department = st.text_input("Department")
+            manager_name = st.text_input("Manager name")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            confirm_password = st.text_input("Confirm password", type="password")
+            submitted = st.form_submit_button("🆕 Create account", type="primary", use_container_width=True)
+        if submitted:
+            if password != confirm_password:
+                st.error("Passwords do not match.")
+            else:
+                ok, msg = _create_user_account(name, email, department, manager_name, username, password)
+                if ok:
+                    st.success(f"✅ Account created successfully. Your Employee ID is {msg}. You can now log in.")
+                else:
+                    st.error(msg)
+
+
 def _fetch_db_rows(table_name: str) -> list[dict]:
     """Fetch rows from a supported table for DB admin view."""
     queries = {
         "employees": """
-            SELECT employee_id, name, email, department, role, manager_name, status, created_at
+            SELECT employee_id, name, email, department, role, manager_name, status, created_at, username, is_admin
             FROM employees
             ORDER BY employee_id
         """,
@@ -265,6 +507,8 @@ def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_acti
     """Apply selected-row action from DB admin panel."""
     if not selected_ids:
         return False, "Please select at least one row."
+    if table_name == "employees" and ADMIN_EMP_ID in selected_ids:
+        return False, "Ajay Kumar's admin profile cannot be deleted or deactivated."
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -285,6 +529,14 @@ def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_acti
             return True, f"Deleted {deleted} email dispatch row(s)."
 
         if table_name == "employees":
+            cursor.execute(
+                f"SELECT employee_id FROM employees WHERE employee_id IN ({placeholders}) AND is_admin = 1",
+                tuple(selected_ids),
+            )
+            protected_rows = [row["employee_id"] for row in cursor.fetchall()]
+            if protected_rows:
+                conn.close()
+                return False, "Admin profiles cannot be deleted or deactivated."
             if employee_action == "hard_delete":
                 cursor.execute(f"DELETE FROM tickets WHERE employee_id IN ({placeholders})", tuple(selected_ids))
                 deleted_tickets = int(cursor.rowcount)
@@ -312,6 +564,8 @@ def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_acti
 
 def _update_employee_record(employee_id: str, updates: dict) -> tuple[bool, str]:
     """Update editable fields on an existing employee record."""
+    if employee_id == ADMIN_EMP_ID:
+        return False, "Ajay Kumar's admin profile cannot be modified from DB admin."
     allowed = {"name", "email", "department", "role", "manager_name", "status"}
     filtered = {k: v for k, v in updates.items() if k in allowed and v is not None and str(v).strip()}
     if not filtered:
@@ -736,29 +990,10 @@ def render_sidebar():
     """Render the sidebar with session info, tools, and quick actions."""
     with st.sidebar:
         current_profile = _get_current_employee_profile()
-        employee_rows = _get_all_employee_profiles()
-        employee_ids = [row["employee_id"] for row in employee_rows] or [DEFAULT_EMPLOYEE_ID]
-        employee_map = {row["employee_id"]: row for row in employee_rows}
         current_employee_id = current_profile.get("employee_id", DEFAULT_EMPLOYEE_ID)
-        default_index = employee_ids.index(current_employee_id) if current_employee_id in employee_ids else 0
 
         st.markdown(f"## 🖥️ {PROJECT_NAME}")
         st.markdown("*Powered by Agentic AI + LangGraph*")
-        selected_employee_id = st.selectbox(
-            "Using dashboard as",
-            employee_ids,
-            index=default_index,
-            format_func=lambda emp_id: (
-                f"{emp_id} — {employee_map.get(emp_id, {}).get('name', emp_id)}"
-            ),
-            key="current_employee_selector",
-        )
-        if selected_employee_id != current_employee_id:
-            st.session_state.current_employee_id = selected_employee_id
-            _reset_conversation_state()
-            st.rerun()
-
-        current_profile = _get_current_employee_profile()
         current_name = current_profile.get("name", "Employee")
         current_email = current_profile.get("email", "")
         current_dept = current_profile.get("department", "Unknown")
@@ -782,6 +1017,10 @@ def render_sidebar():
             st.success("🔐 Admin approval access enabled")
         else:
             st.caption(f"Admin approvals are restricted to {ADMIN_NAME} ({ADMIN_EMAIL}).")
+        st.caption(f"Logged in as **{st.session_state.get('auth_username') or current_email}**")
+        if st.button("🚪 Logout", use_container_width=True):
+            _logout_user()
+            st.rerun()
         st.divider()
 
         # ── API Status ──
@@ -864,15 +1103,15 @@ def render_sidebar():
 
         # ── DB Admin ──
         st.markdown("### 🗄️ DB Admin")
-        if st.button("📊 Show DB Details", use_container_width=True):
+        if st.button("📊 Show DB Details", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
             st.session_state.db_admin_mode = "view"
             st.rerun()
-        if st.button("🗑️ Delete DB Rows", use_container_width=True):
+        if st.button("🗑️ Delete DB Rows", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
             st.session_state.db_admin_mode = "delete"
             st.rerun()
-        if st.button("✏️ Update DB Records", use_container_width=True):
+        if st.button("✏️ Update DB Records", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
             st.session_state.db_admin_mode = "update"
             st.rerun()
@@ -880,6 +1119,8 @@ def render_sidebar():
             st.session_state.show_db_admin = True
             st.session_state.db_admin_mode = "approvals"
             st.rerun()
+        if not is_admin:
+            st.caption("DB admin actions are available only to the admin account.")
 
         st.divider()
 
@@ -980,6 +1221,10 @@ def render_sidebar():
 def render_db_admin_panel():
     """Render DB details and selected-row actions."""
     if not st.session_state.get("show_db_admin"):
+        return
+    if not _current_user_is_admin():
+        st.warning(f"🔒 Only {ADMIN_NAME} can open DB admin.")
+        st.session_state.show_db_admin = False
         return
 
     st.markdown("### 🗄️ Database Details")
@@ -1219,6 +1464,14 @@ def render_approval_callback() -> None:
     </div>
     """, unsafe_allow_html=True)
 
+    if not st.session_state.get("authenticated"):
+        st.warning(f"🔒 Please log in as {ADMIN_NAME} to continue.")
+        render_auth_page()
+        return
+    if not _current_user_is_admin():
+        st.error(f"❌ Only {ADMIN_NAME} ({ADMIN_EMAIL}) can approve or reject requests.")
+        return
+
     if not token:
         st.error("❌ Invalid request — no approval token found.")
         return
@@ -1290,8 +1543,17 @@ def main():
     init_session_state()
     ensure_db()
 
-    # Handle admin approval/rejection callbacks from email links
     params = st.query_params
+    if not st.session_state.get("authenticated"):
+        if not st.session_state.get("db_initialized"):
+            return
+        if "approve" in params or "reject" in params:
+            render_approval_callback()
+            return
+        render_auth_page()
+        return
+
+    # Handle admin approval/rejection callbacks from email links
     if "approve" in params or "reject" in params:
         render_approval_callback()
         return

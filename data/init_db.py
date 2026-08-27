@@ -6,8 +6,13 @@ Creates and seeds the SQLite database with sample tickets and employees.
 import sqlite3
 import json
 import os
+import sys
 from datetime import datetime, timedelta
 import random
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from utils.auth import hash_password
 
 # Respect SQLITE_DB_PATH env var so Azure persistent storage works correctly
 DB_PATH = os.environ.get(
@@ -16,6 +21,32 @@ DB_PATH = os.environ.get(
 )
 
 EMPLOYEES_JSON = os.path.join(os.path.dirname(__file__), "employees.json")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "helloajay21@gmail.com").strip().lower()
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
+ADMIN_EMPLOYEE_ID = "EMP1025"
+
+
+def _safe_close(conn):
+    """Close a sqlite connection quietly."""
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _configure_connection(conn):
+    """Apply sqlite pragmas that reduce lock contention in Streamlit/Azure."""
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
+def _next_employee_id(cursor) -> str:
+    """Generate the next sequential Employee ID."""
+    cursor.execute("SELECT MAX(CAST(SUBSTR(employee_id, 4) AS INTEGER)) FROM employees")
+    row = cursor.fetchone()
+    last_num = row[0] if row and row[0] is not None else 1000
+    return f"EMP{last_num + 1}"
 
 
 def _reconcile_employees_from_tickets(conn):
@@ -26,8 +57,8 @@ def _reconcile_employees_from_tickets(conn):
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT OR IGNORE INTO employees
-        (employee_id, name, email, department, role, manager_name, status, created_at)
+        INSERT INTO employees
+        (employee_id, name, email, department, role, manager_name, status, created_at, username, password_hash, is_admin)
         SELECT
             t.employee_id,
             COALESCE(NULLIF(MAX(t.employee_name), ''), t.employee_id) AS name,
@@ -36,13 +67,133 @@ def _reconcile_employees_from_tickets(conn):
             'Employee' AS role,
             'N/A' AS manager_name,
             'Active' AS status,
-            datetime('now') AS created_at
+            datetime('now') AS created_at,
+            NULL AS username,
+            NULL AS password_hash,
+            0 AS is_admin
         FROM tickets t
         LEFT JOIN employees e ON e.employee_id = t.employee_id
         WHERE e.employee_id IS NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM employees existing_email
+              WHERE LOWER(existing_email.email) = LOWER(t.employee_id || '@autocreated.local')
+          )
         GROUP BY t.employee_id
         """
     )
+
+
+def _ensure_admin_profile(conn):
+    """Keep Ajay Kumar as the single protected admin profile."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT employee_id, email
+        FROM employees
+        WHERE LOWER(email) = LOWER(?)
+        LIMIT 1
+        """,
+        (ADMIN_EMAIL,),
+    )
+    email_owner = cursor.fetchone()
+
+    if email_owner and email_owner["employee_id"] != ADMIN_EMPLOYEE_ID:
+        fallback_email = f"{email_owner['employee_id'].lower()}@autocreated.local"
+        counter = 1
+        while True:
+            cursor.execute(
+                "SELECT 1 FROM employees WHERE LOWER(email) = LOWER(?) AND employee_id <> ?",
+                (fallback_email, email_owner["employee_id"]),
+            )
+            if not cursor.fetchone():
+                break
+            fallback_email = f"{email_owner['employee_id'].lower()}.{counter}@autocreated.local"
+            counter += 1
+        cursor.execute(
+            "UPDATE employees SET email = ? WHERE employee_id = ?",
+            (fallback_email, email_owner["employee_id"]),
+        )
+
+    cursor.execute(
+        """
+        SELECT employee_id, username
+        FROM employees
+        WHERE LOWER(COALESCE(username, '')) = LOWER(?)
+        LIMIT 1
+        """,
+        (ADMIN_EMAIL,),
+    )
+    username_owner = cursor.fetchone()
+    if username_owner and username_owner["employee_id"] != ADMIN_EMPLOYEE_ID:
+        cursor.execute(
+            "UPDATE employees SET username = NULL WHERE employee_id = ?",
+            (username_owner["employee_id"],),
+        )
+
+    cursor.execute("SELECT created_at FROM employees WHERE employee_id = ?", (ADMIN_EMPLOYEE_ID,))
+    existing_admin = cursor.fetchone()
+    created_at = existing_admin["created_at"] if existing_admin and existing_admin["created_at"] else datetime.now().isoformat()
+    password_hash = hash_password(ADMIN_PASSWORD) if ADMIN_PASSWORD else None
+
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO employees
+        (employee_id, name, email, department, role, manager_name, status, created_at, username, password_hash, is_admin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ADMIN_EMPLOYEE_ID,
+            "Ajay Kumar",
+            ADMIN_EMAIL,
+            "IT",
+            "Admin",
+            "Carol Davis",
+            "Active",
+            created_at,
+            ADMIN_EMAIL,
+            password_hash,
+            1,
+        ),
+    )
+
+    if ADMIN_PASSWORD:
+        cursor.execute(
+            """
+            UPDATE employees
+            SET name = ?, email = ?, department = ?, role = ?, manager_name = ?, status = ?, username = ?, password_hash = ?, is_admin = 1
+            WHERE employee_id = ?
+            """,
+            (
+                "Ajay Kumar",
+                ADMIN_EMAIL,
+                "IT",
+                "Admin",
+                "Carol Davis",
+                "Active",
+                ADMIN_EMAIL,
+                password_hash,
+                ADMIN_EMPLOYEE_ID,
+            ),
+        )
+    else:
+        cursor.execute(
+            """
+            UPDATE employees
+            SET name = ?, email = ?, department = ?, role = ?, manager_name = ?, status = ?, username = COALESCE(username, ?), is_admin = 1
+            WHERE employee_id = ?
+            """,
+            (
+                "Ajay Kumar",
+                ADMIN_EMAIL,
+                "IT",
+                "Admin",
+                "Carol Davis",
+                "Active",
+                ADMIN_EMAIL,
+                ADMIN_EMPLOYEE_ID,
+            ),
+        )
 
 
 def init_db():
@@ -52,7 +203,9 @@ def init_db():
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    _configure_connection(conn)
     cursor = conn.cursor()
 
     # ── Employees table ────────────────────────────────────────────────────────
@@ -65,7 +218,10 @@ def init_db():
             role         TEXT NOT NULL DEFAULT 'Employee',
             manager_name TEXT NOT NULL DEFAULT 'N/A',
             status       TEXT NOT NULL DEFAULT 'Active',
-            created_at   TEXT NOT NULL
+            created_at   TEXT NOT NULL,
+            username     TEXT,
+            password_hash TEXT,
+            is_admin     INTEGER NOT NULL DEFAULT 0
         )
     """)
     # Migration: add manager_name to pre-existing DBs that lack the column
@@ -73,6 +229,21 @@ def init_db():
         cursor.execute("ALTER TABLE employees ADD COLUMN manager_name TEXT NOT NULL DEFAULT 'N/A'")
     except Exception:
         pass  # Column already exists
+    try:
+        cursor.execute("ALTER TABLE employees ADD COLUMN username TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE employees ADD COLUMN password_hash TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE employees ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_username_unique ON employees(username) WHERE username IS NOT NULL"
+    )
 
     # Seed employees from JSON if the table is empty
     cursor.execute("SELECT COUNT(*) FROM employees")
@@ -84,8 +255,8 @@ def init_db():
             for emp in employees:
                 cursor.execute("""
                     INSERT OR IGNORE INTO employees
-                    (employee_id, name, email, department, role, manager_name, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'Active', ?)
+                    (employee_id, name, email, department, role, manager_name, status, created_at, username, password_hash, is_admin)
+                    VALUES (?, ?, ?, ?, ?, ?, 'Active', ?, NULL, NULL, 0)
                 """, (
                     emp["employee_id"],
                     emp["name"],
@@ -112,34 +283,7 @@ def init_db():
         except Exception:
             pass
 
-    # Ensure Ajay Kumar remains the single admin profile used for approvals
-    admin_created_at = datetime.now().isoformat()
-    cursor.execute("""
-        INSERT OR IGNORE INTO employees
-        (employee_id, name, email, department, role, manager_name, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        "EMP1025",
-        "Ajay Kumar",
-        "helloajay21@gmail.com",
-        "IT",
-        "Admin",
-        "Carol Davis",
-        "Active",
-        admin_created_at,
-    ))
-    cursor.execute("""
-        UPDATE employees
-        SET name = ?, email = ?, department = ?, role = ?, status = ?
-        WHERE employee_id = ?
-    """, (
-        "Ajay Kumar",
-        "helloajay21@gmail.com",
-        "IT",
-        "Admin",
-        "Active",
-        "EMP1025",
-    ))
+    _ensure_admin_profile(conn)
 
     # ── Tickets table ──────────────────────────────────────────────────────────
     cursor.execute("""
@@ -406,11 +550,9 @@ def get_db_connection():
     db_dir = os.path.dirname(DB_PATH)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    # Keep integrity in long-running environments before reads/writes.
-    _reconcile_employees_from_tickets(conn)
-    conn.commit()
+    _configure_connection(conn)
     return conn
 
 
