@@ -1,4 +1,4 @@
-# 🖥️ IT Support Assistant — AI Operations Assistant Using Agentic AI
+# 🖥️ AI Operations Assistant Using Agentic AI
 
 > **Capstone Project | IIT | AI Operations Assistant**  
 > An intelligent IT support agent built with **LangGraph**, **LangChain**, and **Streamlit**, deployed on **Azure App Service (container)** via GitHub Actions CI/CD.
@@ -11,7 +11,7 @@
 
 Enterprise IT helpdesks handle hundreds of repetitive requests daily — VPN resets, ticket status checks, software installs, and more. Employees waste time navigating portals and waiting for responses. Traditional systems lack conversational intelligence.
 
-**This project solves that** by building an AI-powered IT Support Assistant that understands natural language, picks the right tool, executes it, and returns a clear helpful response — all in one chat interface.
+**This project solves that** by building an AI-powered operations assistant that understands natural language, picks the right tool, executes it, and returns a clear helpful response — all in one chat interface.
 
 ---
 
@@ -212,7 +212,7 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 | `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | Azure only | `true` | Keeps `/home` persistent for App Service SQLite storage |
 | `LOG_LEVEL` | ❌ | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`) |
 | `ENABLE_FILE_LOG` | ❌ | `false` | Write logs to `logs/` directory |
-| `ADMIN_EMAIL` | ❌ | `helloajay21@gmail.com` | Admin inbox that receives VPN onboarding/reset notifications as a copy |
+| `ADMIN_EMAIL` | ❌ | `helloajay21@gmail.com` | Admin inbox for approval notifications; only this admin can approve or reject requests in the dashboard |
 
 ### SMTP Settings (for real VPN email delivery)
 
@@ -275,7 +275,7 @@ Add these **Secrets**:
 | `RESOURCE_GROUP` | Azure resource group that contains the web app |
 | `WEBAPP_NAME` | Azure App Service web app name |
 | `OPENAI_API_KEY` | OpenAI API key used by the assistant |
-| `ADMIN_EMAIL` | Admin copy recipient for VPN notification emails |
+| `ADMIN_EMAIL` | Admin inbox for approval links and VPN copy emails |
 | `SMTP_HOST` | SMTP host, e.g. `smtp.gmail.com` |
 | `SMTP_PORT` | SMTP port, e.g. `587` |
 | `SMTP_USERNAME` | SMTP login username |

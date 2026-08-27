@@ -1,5 +1,5 @@
 """
-Streamlit UI for IT Support Assistant.
+Streamlit UI for the AI Operations Assistant.
 Provides a chat interface with conversation history and tool visibility.
 """
 
@@ -23,9 +23,15 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+PROJECT_NAME = "AI Operations Assistant Using Agentic AI"
+ADMIN_NAME = "Ajay Kumar"
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "helloajay21@gmail.com").strip().lower()
+ADMIN_EMP_ID = "EMP1025"
+DEFAULT_EMPLOYEE_ID = ADMIN_EMP_ID
+
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="IT Support Assistant",
+    page_title=PROJECT_NAME,
     page_icon="🖥️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -117,6 +123,7 @@ def init_session_state():
         "show_db_admin": False,
         "db_admin_mode": "view",
         "db_admin_message": None,
+        "current_employee_id": DEFAULT_EMPLOYEE_ID,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -133,6 +140,73 @@ def ensure_db():
         except Exception as e:
             logger.error("DB init error: %s", e)
             st.error(f"⚠️ Database initialization failed: {e}")
+
+
+def _reset_conversation_state() -> None:
+    """Clear chat state when the active employee changes."""
+    st.session_state.messages = []
+    st.session_state.agent_state = None
+    st.session_state.tool_calls_log = []
+    st.session_state.turn_count = 0
+    st.session_state.session_id = str(time.time())
+
+
+def _get_employee_profile(employee_id: Optional[str]) -> dict:
+    """Fetch one employee profile from the DB."""
+    if not employee_id:
+        return {}
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT employee_id, name, email, department, role, manager_name, status, created_at
+            FROM employees
+            WHERE employee_id = ?
+            """,
+            (employee_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else {}
+    except Exception:
+        return {}
+
+
+def _get_all_employee_profiles() -> list[dict]:
+    """Return employee profiles for the active-user selector."""
+    return _fetch_db_rows("employees")
+
+
+def _get_current_employee_profile() -> dict:
+    """Resolve the active employee for this Streamlit session."""
+    employee_id = st.session_state.get("current_employee_id") or DEFAULT_EMPLOYEE_ID
+    profile = _get_employee_profile(employee_id)
+    if profile:
+        return profile
+    fallback = _get_employee_profile(DEFAULT_EMPLOYEE_ID)
+    if fallback:
+        st.session_state.current_employee_id = fallback["employee_id"]
+        return fallback
+    return {
+        "employee_id": DEFAULT_EMPLOYEE_ID,
+        "name": ADMIN_NAME,
+        "email": ADMIN_EMAIL,
+        "department": "IT",
+        "role": "Admin",
+        "manager_name": "N/A",
+        "status": "Active",
+    }
+
+
+def _current_user_is_admin() -> bool:
+    """Return True only for Ajay Kumar's admin profile."""
+    profile = _get_current_employee_profile()
+    return (
+        profile.get("employee_id") == ADMIN_EMP_ID
+        and (profile.get("name") or "").strip().lower() == ADMIN_NAME.lower()
+        and (profile.get("email") or "").strip().lower() == ADMIN_EMAIL
+    )
 
 
 def _fetch_db_rows(table_name: str) -> list[dict]:
@@ -329,19 +403,8 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
         else:
             return False, f"Unknown request_type: {request_type}"
 
-        # Send confirmation email to employee
-        if approval.get("employee_email"):
-            from agent.nodes import _send_email
-            emp_name = approval.get("employee_name", "Employee")
-            subject  = f"IT Support — Your {request_type.replace('_',' ').title()} Request Approved"
-            body = (
-                f"Hello {emp_name},\n\n"
-                f"Your IT support request has been approved and processed.\n\n"
-                f"Request Type : {request_type.replace('_',' ').title()}\n\n"
-                f"Result:\n{result_msg}\n\n"
-                f"---\nTechCorp IT Support System"
-            )
-            _send_email(approval["employee_email"], subject, body)
+        # Notify employee via email AND store in-app notification
+        _notify_employee_both_ways(approval, str(result_msg), approved=True)
 
         return True, str(result_msg)
 
@@ -350,14 +413,151 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
         return False, f"Execution error: {exc}"
 
 
-def _send_response_email(content: str, employee_id: Optional[str] = None) -> tuple[bool, str]:
-    """Send an agent response to the employee's registered email."""
-    target_email = AUTHOR_EMAIL
-    emp_name     = AUTHOR_NAME
+def _notify_employee_both_ways(
+    approval: dict, result_msg: str, approved: bool
+) -> dict:
+    """
+    Notify employee about approval/rejection via TWO channels:
+    1. Email  — if a valid email exists in the approval record or the DB
+    2. In-app — stores a notification in pending_approvals.result_message
+                (notification_shown=0) so the employee sees it in chat on
+                their next visit, regardless of email success.
+
+    Returns {"email_sent": bool, "email_error": str}
+    """
+    import re as _re
+    from agent.nodes import _send_email
+
+    emp_email = (approval.get("employee_email") or "").strip()
+    emp_name  = approval.get("employee_name", "Employee")
+    req_type  = approval.get("request_type", "Request").replace("_", " ").title()
+
+    # If no email in approval record, look it up from the employees table
+    if not emp_email or not _re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", emp_email):
+        try:
+            _conn = get_db_connection()
+            _cur  = _conn.cursor()
+            _cur.execute("SELECT email FROM employees WHERE employee_id = ?", (approval.get("employee_id", ""),))
+            _row = _cur.fetchone()
+            _conn.close()
+            if _row:
+                emp_email = _row["email"].strip()
+        except Exception:
+            pass
+
+    valid_email = bool(
+        emp_email and
+        _re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$", emp_email)
+        and "@autocreated.local" not in emp_email
+    )
+
+    # ── Build email content ───────────────────────────────────────────────────
+    if approved:
+        subject = f"✅ IT Support — Your {req_type} Request Approved & Completed"
+        email_body = (
+            f"Hello {emp_name},\n\n"
+            f"Great news! Your IT support request has been approved and processed.\n\n"
+            f"Request Type : {req_type}\n\n"
+            f"Result:\n{result_msg}\n\n"
+            f"If you have any questions, contact IT Helpdesk.\n"
+            f"---\nTechCorp IT Support System"
+        )
+        notif_heading = "✅ **Your Request Was Approved & Executed**"
+        notif_body    = result_msg[:400]
+    else:
+        subject = f"❌ IT Support — Your {req_type} Request Rejected"
+        email_body = (
+            f"Hello {emp_name},\n\n"
+            f"Your IT support request has been reviewed and rejected by the IT Admin.\n\n"
+            f"Request Type : {req_type}\n\n"
+            f"If you believe this is an error, please contact IT Helpdesk directly.\n"
+            f"---\nTechCorp IT Support System"
+        )
+        notif_heading = "❌ **Your Request Was Rejected by Admin**"
+        notif_body    = "Contact IT Helpdesk if you need assistance."
+
+    # ── Send email ────────────────────────────────────────────────────────────
+    email_sent  = False
+    email_error = ""
+    if valid_email:
+        email_sent, email_error = _send_email(emp_email, subject, email_body)
+    else:
+        email_error = f"No valid email on file (got: '{emp_email}')"
+
+    # ── Build in-app notification message ────────────────────────────────────
+    email_status_note = (
+        f"\n\n📧 *Confirmation email sent to **{emp_email}**.*"
+        if email_sent
+        else f"\n\n📧 *Email notification failed — {email_error}. Please check the app for this update.*"
+    )
+    notification_msg = f"{notif_heading}\n\n**Request:** {req_type}\n\n{notif_body}{email_status_note}"
+
+    # ── Persist as in-app notification (notification_shown=0 → will be shown) ─
+    try:
+        _conn = get_db_connection()
+        _cur  = _conn.cursor()
+        _cur.execute(
+            "UPDATE pending_approvals SET result_message=?, notification_shown=0 WHERE approval_id=?",
+            (notification_msg[:2000], approval.get("approval_id", "")),
+        )
+        _conn.commit()
+        _conn.close()
+    except Exception as exc:
+        logger.error("Failed to store in-app notification: %s", exc)
+
+    return {"email_sent": email_sent, "email_error": email_error}
+
+
+def _get_unseen_notifications(employee_id: str) -> list:
+    """Return unshown approval notifications for a given employee."""
+    if not employee_id:
+        return []
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        eid = employee_id or AUTHOR_EMP_ID
+        cursor.execute("""
+            SELECT approval_id, request_type, status, result_message, resolved_at
+            FROM pending_approvals
+            WHERE employee_id = ?
+              AND status IN ('Approved', 'Rejected', 'Failed')
+              AND (notification_shown IS NULL OR notification_shown = 0)
+            ORDER BY resolved_at DESC
+            LIMIT 10
+        """, (employee_id,))
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
+def _mark_notifications_shown(approval_ids: list) -> None:
+    """Mark notifications as shown so they don't reappear."""
+    if not approval_ids:
+        return
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in approval_ids)
+        cursor.execute(
+            f"UPDATE pending_approvals SET notification_shown=1 WHERE approval_id IN ({placeholders})",
+            tuple(approval_ids),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.error("Failed to mark notifications shown: %s", exc)
+
+
+def _send_response_email(content: str, employee_id: Optional[str] = None) -> tuple[bool, str]:
+    """Send an agent response to the employee's registered email."""
+    current_profile = _get_current_employee_profile()
+    target_email = current_profile.get("email", ADMIN_EMAIL)
+    emp_name = current_profile.get("name", ADMIN_NAME)
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        eid = employee_id or current_profile.get("employee_id") or DEFAULT_EMPLOYEE_ID
         cursor.execute("SELECT name, email FROM employees WHERE employee_id = ?", (eid,))
         row = cursor.fetchone()
         conn.close()
@@ -368,14 +568,72 @@ def _send_response_email(content: str, employee_id: Optional[str] = None) -> tup
         pass
 
     from agent.nodes import _send_email
-    subject = f"IT Support Assistant — Response for {emp_name}"
+    subject = f"{PROJECT_NAME} — Response for {emp_name}"
     body = (
         f"Hello {emp_name},\n\n"
-        f"Here is your IT Support Assistant response:\n\n"
+        f"Here is your {PROJECT_NAME} response:\n\n"
         f"{content}\n\n"
         f"---\nTechCorp IT Support System"
     )
     return _send_email(target_email, subject, body)
+
+
+def _render_pending_approval_actions(widget_prefix: str, show_all_rows: bool = True) -> None:
+    """Render admin-only approval controls."""
+    if not _current_user_is_admin():
+        st.warning(f"🔒 Approval actions are available only to {ADMIN_NAME} ({ADMIN_EMAIL}).")
+        return
+
+    approval_rows = _fetch_db_rows("pending_approvals")
+    pending_rows = [r for r in approval_rows if r.get("status") == "Pending"]
+
+    if not pending_rows:
+        st.success("✅ No pending approvals - all caught up!")
+        if show_all_rows:
+            st.dataframe(approval_rows, use_container_width=True, hide_index=True)
+        return
+
+    st.warning(f"⏳ {len(pending_rows)} request(s) awaiting approval")
+    st.dataframe(
+        approval_rows if show_all_rows else pending_rows,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("**Approve or reject a request:**")
+    option_labels = [
+        f"{row['approval_id'][:16]}...  |  {row['request_type']}  |  {row['employee_id']}"
+        for row in pending_rows
+    ]
+    selected_approval = st.selectbox(
+        "Select request",
+        option_labels,
+        key=f"{widget_prefix}_approval_select",
+    )
+    sel_idx = option_labels.index(selected_approval)
+    sel_row = pending_rows[sel_idx]
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("✅ Approve & Execute", type="primary", use_container_width=True, key=f"{widget_prefix}_approve_btn"):
+            _update_approval_status(sel_row["approval_id"], "Approved", "")
+            ok, msg = _execute_approved_action(sel_row)
+            if not ok:
+                _update_approval_status(sel_row["approval_id"], "Failed", msg)
+            st.session_state.db_admin_message = (
+                "success" if ok else "error",
+                f"{'Approved & employee notified' if ok else 'Failed'}: {msg[:200]}",
+            )
+            st.rerun()
+    with col_b:
+        if st.button("❌ Reject", use_container_width=True, key=f"{widget_prefix}_reject_btn"):
+            _update_approval_status(sel_row["approval_id"], "Rejected", "Rejected by admin")
+            _notify_employee_both_ways(sel_row, "", approved=False)
+            st.session_state.db_admin_message = (
+                "success",
+                f"Rejected & employee notified: {sel_row['approval_id'][:16]}...",
+            )
+            st.rerun()
 
 
 def get_agent_graph():
@@ -407,14 +665,17 @@ def run_agent(user_input: str, forced_employee_id: Optional[str] = None) -> Opti
 
     # Build input for this turn
     new_message = HumanMessage(content=user_input)
+    current_profile = _get_current_employee_profile()
+    base_employee_id = forced_employee_id or current_profile.get("employee_id")
+    base_employee_name = current_profile.get("name")
 
     # If we have prior state, carry it forward
     if st.session_state.agent_state:
         prior = st.session_state.agent_state
         input_state = {
             "messages": list(prior.messages) + [new_message],
-            "employee_id": forced_employee_id or prior.employee_id,
-            "employee_name": prior.employee_name,
+            "employee_id": forced_employee_id or prior.employee_id or base_employee_id,
+            "employee_name": prior.employee_name or base_employee_name,
             "intent": prior.intent,
             "pending_ticket": prior.pending_ticket,
             "pending_employee": prior.pending_employee,
@@ -428,8 +689,8 @@ def run_agent(user_input: str, forced_employee_id: Optional[str] = None) -> Opti
     else:
         input_state = {
             "messages": [new_message],
-            "employee_id": forced_employee_id,
-            "employee_name": AUTHOR_NAME if forced_employee_id else None,
+            "employee_id": base_employee_id,
+            "employee_name": base_employee_name,
         }
 
     try:
@@ -471,33 +732,56 @@ def run_agent(user_input: str, forced_employee_id: Optional[str] = None) -> Opti
         return f"❌ An error occurred: {str(e)}\n\nPlease try again or contact IT helpdesk at ext. 4357."
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-
-# Author identity — shown in sidebar and used in personalized quick prompts
-AUTHOR_NAME     = "Ajay Kumar"
-AUTHOR_EMAIL    = "helloajay21@gmail.com"
-AUTHOR_EMP_ID   = "EMP1025"
-AUTHOR_DEPT     = "IT"
-
-
 def render_sidebar():
     """Render the sidebar with session info, tools, and quick actions."""
     with st.sidebar:
-        st.markdown("## 🖥️ IT Support Assistant")
+        current_profile = _get_current_employee_profile()
+        employee_rows = _get_all_employee_profiles()
+        employee_ids = [row["employee_id"] for row in employee_rows] or [DEFAULT_EMPLOYEE_ID]
+        employee_map = {row["employee_id"]: row for row in employee_rows}
+        current_employee_id = current_profile.get("employee_id", DEFAULT_EMPLOYEE_ID)
+        default_index = employee_ids.index(current_employee_id) if current_employee_id in employee_ids else 0
+
+        st.markdown(f"## 🖥️ {PROJECT_NAME}")
         st.markdown("*Powered by Agentic AI + LangGraph*")
+        selected_employee_id = st.selectbox(
+            "Using dashboard as",
+            employee_ids,
+            index=default_index,
+            format_func=lambda emp_id: (
+                f"{emp_id} — {employee_map.get(emp_id, {}).get('name', emp_id)}"
+            ),
+            key="current_employee_selector",
+        )
+        if selected_employee_id != current_employee_id:
+            st.session_state.current_employee_id = selected_employee_id
+            _reset_conversation_state()
+            st.rerun()
+
+        current_profile = _get_current_employee_profile()
+        current_name = current_profile.get("name", "Employee")
+        current_email = current_profile.get("email", "")
+        current_dept = current_profile.get("department", "Unknown")
+        current_role = current_profile.get("role", "Employee")
+        is_admin = _current_user_is_admin()
+
         st.markdown(
             f"""
             <div class="author-card">
-                <div class="label">Project Author</div>
-                <div class="name">{AUTHOR_NAME}</div>
-                <div class="email">{AUTHOR_EMAIL}</div>
+                <div class="label">Current User</div>
+                <div class="name">{current_name}</div>
+                <div class="email">{current_email}</div>
                 <div class="email" style="margin-top:3px;color:#0078D4;font-weight:600;">
-                    🆔 {AUTHOR_EMP_ID} &nbsp;·&nbsp; {AUTHOR_DEPT}
+                    🆔 {current_employee_id} &nbsp;·&nbsp; {current_dept} &nbsp;·&nbsp; {current_role}
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+        if is_admin:
+            st.success("🔐 Admin approval access enabled")
+        else:
+            st.caption(f"Admin approvals are restricted to {ADMIN_NAME} ({ADMIN_EMAIL}).")
         st.divider()
 
         # ── API Status ──
@@ -519,18 +803,13 @@ def render_sidebar():
         st.markdown("### 📊 Session Info")
         agent_state = st.session_state.get("agent_state")
 
-        # Resolve employee identity: prefer whatever the agent detected,
-        # fall back to the known author identity for this deployment
-        session_emp_id   = (agent_state.employee_id if agent_state else None) or AUTHOR_EMP_ID
-        session_emp_name = (agent_state.employee_name if agent_state else None) or AUTHOR_NAME
-
         col1, col2 = st.columns(2)
         with col1:
             st.metric("Turns", st.session_state.turn_count)
         with col2:
-            st.metric("Employee ID", session_emp_id)
+            st.metric("Employee ID", current_employee_id)
 
-        st.caption(f"👤 {session_emp_name}")
+        st.caption(f"👤 {current_name}")
 
         if agent_state and agent_state.awaiting_info:
             field_labels = {
@@ -597,7 +876,7 @@ def render_sidebar():
             st.session_state.show_db_admin = True
             st.session_state.db_admin_mode = "update"
             st.rerun()
-        if st.button("✅ Pending Approvals", use_container_width=True):
+        if st.button("✅ Pending Approvals", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
             st.session_state.db_admin_mode = "approvals"
             st.rerun()
@@ -610,7 +889,7 @@ def render_sidebar():
 
         vpn_emp_id_input = st.text_input(
             "Employee ID",
-            value=AUTHOR_EMP_ID,
+            value=current_employee_id,
             key="vpn_email_emp_id",
             placeholder="e.g. EMP1025",
         )
@@ -658,23 +937,23 @@ def render_sidebar():
              "How do I set up MFA on my phone? Give me step-by-step guide.",
              None),
             # Ticket lookup — includes EMP ID, goes direct
-            (f"🎫 My tickets ({AUTHOR_EMP_ID})",
-             f"Show all tickets for employee ID {AUTHOR_EMP_ID}.",
-             AUTHOR_EMP_ID),
+            (f"🎫 My tickets ({current_employee_id})",
+             f"Show all tickets for employee ID {current_employee_id}.",
+             current_employee_id),
             ("🏢 Show all employee tickets",
              "Show all tickets for all employees.",
              None),
             # Ticket creation — fully pre-filled, goes straight to confirmation
             (f"💻 Laptop slow — raise ticket",
-             (f"My employee ID is {AUTHOR_EMP_ID}. My laptop has been very slow for 2 days — "
+             (f"My employee ID is {current_employee_id}. My laptop has been very slow for 2 days - "
               f"apps freeze frequently and boot takes over 10 minutes. "
               f"Category: Laptop, Priority: High. Please raise a support ticket."),
-             AUTHOR_EMP_ID),
+             current_employee_id),
             (f"🔒 VPN issue — raise ticket",
-             (f"My employee ID is {AUTHOR_EMP_ID}. VPN keeps disconnecting every 15 minutes "
+             (f"My employee ID is {current_employee_id}. VPN keeps disconnecting every 15 minutes "
               f"while working from home, disrupting meetings. "
               f"Category: VPN, Priority: High. Please raise a ticket."),
-             AUTHOR_EMP_ID),
+             current_employee_id),
             # Registration — one-line format, goes straight to confirmation
             ("👤 Register new employee",
              "Register new employee: Jane Smith, jane.smith@techcorp.com, Engineering, Carol Davis",
@@ -765,43 +1044,7 @@ def render_db_admin_panel():
 
     if mode == "approvals":
         st.markdown("#### ✅ Pending Approvals — Admin Review")
-        approval_rows = _fetch_db_rows("pending_approvals")
-        pending_rows  = [r for r in approval_rows if r.get("status") == "Pending"]
-
-        if not pending_rows:
-            st.success("✅ No pending approvals — all caught up!")
-        else:
-            st.warning(f"⏳ {len(pending_rows)} request(s) awaiting approval")
-
-        st.dataframe(approval_rows, use_container_width=True, hide_index=True)
-
-        if pending_rows:
-            st.markdown("**Manually Approve / Reject:**")
-            selected_approval = st.selectbox(
-                "Select request",
-                [r["approval_id"][:16] + "…  |  " + r["request_type"] + "  |  " + r["employee_id"]
-                 for r in pending_rows],
-                key="approval_select",
-            )
-            sel_idx = [r["approval_id"][:16] + "…  |  " + r["request_type"] + "  |  " + r["employee_id"]
-                       for r in pending_rows].index(selected_approval)
-            sel_row = pending_rows[sel_idx]
-
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("✅ Approve & Execute", type="primary", use_container_width=True):
-                    ok, msg = _execute_approved_action(sel_row)
-                    _update_approval_status(sel_row["approval_id"], "Approved" if ok else "Failed", msg)
-                    st.session_state.db_admin_message = (
-                        "success" if ok else "error",
-                        f"{'Approved' if ok else 'Failed'}: {msg[:200]}"
-                    )
-                    st.rerun()
-            with col_b:
-                if st.button("❌ Reject", use_container_width=True):
-                    _update_approval_status(sel_row["approval_id"], "Rejected", "Rejected by admin")
-                    st.session_state.db_admin_message = ("success", f"Rejected: {sel_row['approval_id'][:16]}…")
-                    st.rerun()
+        _render_pending_approval_actions("db_admin", show_all_rows=True)
         return
 
     st.caption("View all rows in DB. Use delete mode to select and remove specific rows.")
@@ -853,25 +1096,51 @@ def render_db_admin_panel():
 # ── Main Chat Interface ───────────────────────────────────────────────────────
 def render_main():
     """Render the main chat interface."""
+    current_profile = _get_current_employee_profile()
+    current_emp_id = current_profile.get("employee_id", DEFAULT_EMPLOYEE_ID)
+    current_name = current_profile.get("name", "Employee")
+    is_admin = _current_user_is_admin()
 
     # Header
     st.markdown("""
     <div class="main-header">
-        <h1>🖥️ TechCorp IT Support Assistant</h1>
-        <p>Powered by Agentic AI · Ask me anything about IT support</p>
+        <h1>🖥️ AI Operations Assistant Using Agentic AI</h1>
+        <p>Powered by Agentic AI · Ask me anything about IT support operations</p>
     </div>
     """, unsafe_allow_html=True)
 
     render_db_admin_panel()
 
-    # Display chat history
+    if is_admin:
+        pending_admin_rows = [
+            row for row in _fetch_db_rows("pending_approvals")
+            if row.get("status") == "Pending"
+        ]
+        if pending_admin_rows:
+            st.info(f"🔔 {len(pending_admin_rows)} admin approval request(s) are waiting for action.")
+            with st.expander("Open admin approval queue", expanded=True):
+                _render_pending_approval_actions("main_admin", show_all_rows=False)
+
+    # ── In-app approval notifications (shown once, then dismissed) ────────────
+    unseen = _get_unseen_notifications(current_emp_id)
+    if unseen:
+        for notif in unseen:
+            icon = "✅" if notif["status"] == "Approved" else "❌"
+            req_label = notif["request_type"].replace("_", " ").title()
+            resolved_on = (notif.get("resolved_at") or "")[:10]
+            with st.expander(
+                f"{icon} IT Admin Update: **{req_label}** — {resolved_on}",
+                expanded=True,
+            ):
+                st.markdown(notif.get("result_message") or "_No details available._")
+        _mark_notifications_shown([n["approval_id"] for n in unseen])
     chat_container = st.container()
     with chat_container:
         if not st.session_state.messages:
             st.markdown(f"""
-            👋 **Welcome, {AUTHOR_NAME}!**
+            👋 **Welcome, {current_name}!**
 
-            I'm your AI IT Support Assistant. I can help you with:
+            I'm your AI operations assistant. I can help you with:
             - 🔍 **Troubleshooting** — Step-by-step guides for common IT issues
             - 🎫 **Ticket Status** — Check your existing support tickets
             - 📝 **Raise a Ticket** — Create a new IT support request
@@ -880,24 +1149,22 @@ def render_main():
 
             **Try asking:**
             - *"How do I reset my VPN password?"*
-            - *"Check tickets for {AUTHOR_EMP_ID}"*
+            - *"Check tickets for {current_emp_id}"*
             - *"My laptop won't turn on, please raise a ticket"*
             - *"Register a new employee: Jane Smith, jane@techcorp.com, Engineering, Carol Davis"*
-            - *"Delete employee EMP1025 (deactivate)"*
+            - *"Delete employee {current_emp_id} (deactivate)"*
             """)
         else:
             for i, msg in enumerate(st.session_state.messages):
                 with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🤖"):
                     st.markdown(msg["content"])
                     if msg["role"] == "assistant":
-                        agent_state = st.session_state.get("agent_state")
-                        emp_id = (agent_state.employee_id if agent_state else None) or AUTHOR_EMP_ID
                         if st.button(
                             "📧 Email this response",
                             key=f"email_resp_{i}",
                             help="Send this response to your registered email address",
                         ):
-                            ok, err = _send_response_email(msg["content"], emp_id)
+                            ok, err = _send_response_email(msg["content"], current_emp_id)
                             if ok:
                                 st.success("✅ Response sent to your registered email!")
                             else:
@@ -945,9 +1212,9 @@ def render_approval_callback() -> None:
     token   = params.get("approve") or params.get("reject")
     is_approve = "approve" in params
 
-    st.markdown("""
+    st.markdown(f"""
     <div class="main-header">
-        <h1>🔐 IT Support — Admin Approval Portal</h1>
+        <h1>🔐 {PROJECT_NAME} — Admin Approval Portal</h1>
         <p>TechCorp IT Support System</p>
     </div>
     """, unsafe_allow_html=True)
@@ -997,29 +1264,23 @@ def render_approval_callback() -> None:
     ):
         if is_approve:
             with st.spinner("Executing approved action…"):
+                # Set status first so the in-app notification query sees 'Approved'
+                _update_approval_status(token, "Approved", "")
                 ok, msg = _execute_approved_action(approval)
-            _update_approval_status(token, "Approved" if ok else "Failed", msg)
+            if not ok:
+                _update_approval_status(token, "Failed", msg)
             if ok:
                 st.success(f"✅ **Approved & Executed**\n\n{msg[:400]}")
+                st.info("📧 Employee notified via email and in-app notification.")
             else:
                 st.error(f"❌ Execution failed: {msg}")
         else:
             _update_approval_status(token, "Rejected", "Rejected by admin via email link")
-            # Notify employee
-            if approval.get("employee_email"):
-                from agent.nodes import _send_email
-                _send_email(
-                    approval["employee_email"],
-                    f"IT Support — Your {approval['request_type'].replace('_',' ').title()} Request Rejected",
-                    f"Hello {approval.get('employee_name','Employee')},\n\n"
-                    f"Your IT support request ({approval['request_type'].replace('_',' ').title()}) "
-                    f"has been rejected by the IT Admin.\n\nPlease contact IT helpdesk for more information.\n\n"
-                    f"---\nTechCorp IT Support System",
-                )
-            st.warning("❌ Request rejected. Employee has been notified.")
+            _notify_employee_both_ways(approval, "", approved=False)
+            st.warning("❌ Request rejected. Employee has been notified via email and in-app.")
 
     st.divider()
-    if st.button("🏠 Go to IT Support Assistant", use_container_width=True):
+    if st.button(f"🏠 Go to {PROJECT_NAME}", use_container_width=True):
         st.query_params.clear()
         st.rerun()
 

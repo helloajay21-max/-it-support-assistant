@@ -112,6 +112,35 @@ def init_db():
         except Exception:
             pass
 
+    # Ensure Ajay Kumar remains the single admin profile used for approvals
+    admin_created_at = datetime.now().isoformat()
+    cursor.execute("""
+        INSERT OR IGNORE INTO employees
+        (employee_id, name, email, department, role, manager_name, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "EMP1025",
+        "Ajay Kumar",
+        "helloajay21@gmail.com",
+        "IT",
+        "Admin",
+        "Carol Davis",
+        "Active",
+        admin_created_at,
+    ))
+    cursor.execute("""
+        UPDATE employees
+        SET name = ?, email = ?, department = ?, role = ?, status = ?
+        WHERE employee_id = ?
+    """, (
+        "Ajay Kumar",
+        "helloajay21@gmail.com",
+        "IT",
+        "Admin",
+        "Active",
+        "EMP1025",
+    ))
+
     # ── Tickets table ──────────────────────────────────────────────────────────
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
@@ -148,19 +177,25 @@ def init_db():
     # ── Pending approvals table ──────────────────────────────────────────────
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS pending_approvals (
-            approval_id    TEXT PRIMARY KEY,
-            request_type   TEXT NOT NULL,
-            employee_id    TEXT NOT NULL,
-            employee_email TEXT NOT NULL DEFAULT '',
-            employee_name  TEXT NOT NULL DEFAULT '',
-            request_data   TEXT NOT NULL,
-            status         TEXT NOT NULL DEFAULT 'Pending',
-            requested_at   TEXT NOT NULL,
-            resolved_at    TEXT,
-            result_message TEXT,
-            admin_notes    TEXT
+            approval_id        TEXT PRIMARY KEY,
+            request_type       TEXT NOT NULL,
+            employee_id        TEXT NOT NULL,
+            employee_email     TEXT NOT NULL DEFAULT '',
+            employee_name      TEXT NOT NULL DEFAULT '',
+            request_data       TEXT NOT NULL,
+            status             TEXT NOT NULL DEFAULT 'Pending',
+            requested_at       TEXT NOT NULL,
+            resolved_at        TEXT,
+            result_message     TEXT,
+            admin_notes        TEXT,
+            notification_shown INTEGER NOT NULL DEFAULT 0
         )
     """)
+    # Migration: add notification_shown to pre-existing DBs that lack the column
+    try:
+        cursor.execute("ALTER TABLE pending_approvals ADD COLUMN notification_shown INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass  # Column already exists
 
     # Resolve Ajay Kumar's manager name dynamically from JSON data
     _emp1025_manager = "my manager"
