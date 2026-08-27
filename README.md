@@ -25,6 +25,7 @@ An **Agentic AI system** where an LLM acts as an intelligent agent that:
 4. **Maintains state** across multi-turn conversations
 5. **Returns** a formatted, professional response
 6. **Sends and logs operational emails** (e.g., VPN first-time setup + reset) to the employee-linked email when valid
+7. **Supports secure multi-user access** with admin-only approvals and self-service profile correction for normal users
 
 ---
 
@@ -214,6 +215,8 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 | `ENABLE_FILE_LOG` | ❌ | `false` | Write logs to `logs/` directory |
 | `ADMIN_EMAIL` | ❌ | `helloajay21@gmail.com` | Admin inbox for approval notifications; only this admin can approve or reject requests in the dashboard |
 | `ADMIN_PASSWORD` | ❌ | _(empty)_ | Admin login password used for Ajay Kumar's secure approval access |
+
+Normal users can correct their own stored profile details from the **Update My Details** screen after login. This is the recommended way to fix an invalid email address so response emails and approval notifications can be delivered correctly.
 
 ### SMTP Settings (for real VPN email delivery)
 

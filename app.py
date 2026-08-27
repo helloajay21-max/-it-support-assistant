@@ -5,6 +5,7 @@ Provides a chat interface with conversation history and tool visibility.
 
 import os
 import re
+import sqlite3
 import sys
 import time
 from datetime import datetime
@@ -126,6 +127,8 @@ def init_session_state():
         "show_db_admin": False,
         "db_admin_mode": "view",
         "db_admin_message": None,
+        "show_profile_editor": False,
+        "profile_editor_message": None,
         "authenticated": False,
         "current_employee_id": None,
         "auth_username": None,
@@ -165,7 +168,7 @@ def _get_employee_profile(employee_id: Optional[str]) -> dict:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT employee_id, name, email, department, role, manager_name, status, created_at
+            SELECT employee_id, name, email, department, role, manager_name, status, created_at, username, is_admin
             FROM employees
             WHERE employee_id = ?
             """,
@@ -388,6 +391,8 @@ def _logout_user() -> None:
     st.session_state.auth_username = None
     st.session_state.show_db_admin = False
     st.session_state.db_admin_mode = "view"
+    st.session_state.show_profile_editor = False
+    st.session_state.profile_editor_message = None
 
 
 def render_auth_page() -> None:
@@ -562,30 +567,180 @@ def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_acti
         return False, f"DB action failed: {exc}"
 
 
-def _update_employee_record(employee_id: str, updates: dict) -> tuple[bool, str]:
+def _update_employee_record(
+    employee_id: str,
+    updates: dict,
+    *,
+    allow_admin: bool = False,
+    allow_login_updates: bool = False,
+) -> tuple[bool, str]:
     """Update editable fields on an existing employee record."""
-    if employee_id == ADMIN_EMP_ID:
-        return False, "Ajay Kumar's admin profile cannot be modified from DB admin."
+    if employee_id == ADMIN_EMP_ID and not allow_admin:
+        return False, "Ajay Kumar's admin profile cannot be modified from this screen."
+
     allowed = {"name", "email", "department", "role", "manager_name", "status"}
-    filtered = {k: v for k, v in updates.items() if k in allowed and v is not None and str(v).strip()}
+    if allow_login_updates:
+        allowed.update({"username", "password_hash"})
+
+    filtered = {}
+    for key, value in updates.items():
+        if key not in allowed or value is None:
+            continue
+        filtered[key] = value.strip() if isinstance(value, str) else value
+
+    if "password_hash" in filtered and not filtered["password_hash"]:
+        filtered.pop("password_hash")
     if not filtered:
         return False, "No valid fields to update."
+
+    conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        set_clause = ", ".join(f"{k} = ?" for k in filtered)
+        cursor.execute(
+            "SELECT employee_id, email, username, is_admin FROM employees WHERE employee_id = ?",
+            (employee_id,),
+        )
+        existing = cursor.fetchone()
+        if not existing:
+            conn.close()
+            return False, f"Employee {employee_id} not found."
+        existing = dict(existing)
+        if existing.get("is_admin") and not allow_admin:
+            conn.close()
+            return False, "Admin profile updates are restricted."
+
+        if "name" in filtered and len(filtered["name"]) < 2:
+            conn.close()
+            return False, "Name must be at least 2 characters."
+        if "email" in filtered:
+            filtered["email"] = filtered["email"].lower()
+            if not EMAIL_RE.match(filtered["email"]):
+                conn.close()
+                return False, "Please enter a valid email address."
+            cursor.execute(
+                "SELECT employee_id FROM employees WHERE LOWER(email) = LOWER(?) AND employee_id <> ?",
+                (filtered["email"], employee_id),
+            )
+            if cursor.fetchone():
+                conn.close()
+                return False, "That email address is already in use."
+        if "department" in filtered and len(filtered["department"]) < 2:
+            conn.close()
+            return False, "Department is required."
+        if "manager_name" in filtered and len(filtered["manager_name"]) < 2:
+            conn.close()
+            return False, "Manager name is required."
+        if "status" in filtered and filtered["status"] not in {"Active", "Inactive"}:
+            conn.close()
+            return False, "Status must be Active or Inactive."
+        if "username" in filtered:
+            filtered["username"] = filtered["username"].lower()
+            if not validate_username(filtered["username"]):
+                conn.close()
+                return False, "Username must be 4-40 characters and use only letters, numbers, dot, underscore, or hyphen."
+            cursor.execute(
+                "SELECT employee_id FROM employees WHERE LOWER(username) = LOWER(?) AND employee_id <> ?",
+                (filtered["username"], employee_id),
+            )
+            if cursor.fetchone():
+                conn.close()
+                return False, "That username is already taken."
+
+        set_clause = ", ".join(f"{key} = ?" for key in filtered)
         cursor.execute(
             f"UPDATE employees SET {set_clause} WHERE employee_id = ?",
             (*filtered.values(), employee_id),
         )
-        updated = cursor.rowcount
         conn.commit()
         conn.close()
-        if updated:
-            return True, f"✅ Updated {employee_id}: {', '.join(filtered.keys())}"
-        return False, f"Employee {employee_id} not found."
-    except Exception as exc:
+        return True, f"✅ Updated {employee_id}: {', '.join(filtered.keys())}"
+    except sqlite3.IntegrityError as exc:
+        if conn is not None:
+            conn.close()
         return False, f"Update failed: {exc}"
+    except Exception as exc:
+        if conn is not None:
+            conn.close()
+        return False, f"Update failed: {exc}"
+
+
+def render_profile_editor() -> None:
+    """Render self-service profile updates for the logged-in user."""
+    if not st.session_state.get("show_profile_editor"):
+        return
+
+    current_profile = _get_current_employee_profile()
+    if not current_profile:
+        st.warning("Please log in again to update your profile.")
+        st.session_state.show_profile_editor = False
+        return
+
+    st.markdown("### 👤 Update My Profile")
+    st.caption("Correct your own name, email, department, manager, username, or password so notifications and login stay accurate.")
+
+    profile_msg = st.session_state.get("profile_editor_message")
+    if profile_msg:
+        level, text = profile_msg
+        if level == "success":
+            st.success(text)
+        else:
+            st.error(text)
+        st.session_state.profile_editor_message = None
+
+    with st.form("self_profile_update_form"):
+        new_name = st.text_input("Full name", value=current_profile.get("name", ""))
+        new_email = st.text_input("Email", value=current_profile.get("email", ""))
+        new_dept = st.text_input("Department", value=current_profile.get("department", ""))
+        new_manager = st.text_input("Manager name", value=current_profile.get("manager_name", ""))
+        new_username = st.text_input(
+            "Username",
+            value=(current_profile.get("username") or st.session_state.get("auth_username") or ""),
+        )
+        new_password = st.text_input("New password (optional)", type="password")
+        confirm_password = st.text_input("Confirm new password", type="password")
+        submitted = st.form_submit_button("💾 Save My Details", type="primary", use_container_width=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Close profile editor", use_container_width=True):
+            st.session_state.show_profile_editor = False
+            st.rerun()
+    with col2:
+        st.caption(f"Employee ID: {current_profile.get('employee_id', '')}")
+
+    if not submitted:
+        return
+
+    if new_password and new_password != confirm_password:
+        st.session_state.profile_editor_message = ("error", "Passwords do not match.")
+        st.rerun()
+
+    if new_password:
+        password_error = _password_validation_error(new_password)
+        if password_error:
+            st.session_state.profile_editor_message = ("error", password_error)
+            st.rerun()
+
+    updates = {
+        "name": new_name,
+        "email": new_email,
+        "department": new_dept,
+        "manager_name": new_manager,
+        "username": new_username,
+    }
+    if new_password:
+        updates["password_hash"] = hash_password(new_password)
+
+    ok, msg = _update_employee_record(
+        current_profile["employee_id"],
+        updates,
+        allow_login_updates=True,
+    )
+    if ok:
+        st.session_state.auth_username = (new_username or new_email).strip().lower()
+    st.session_state.profile_editor_message = ("success" if ok else "error", msg)
+    st.rerun()
 
 
 def _get_pending_approval(token: str) -> Optional[dict]:
@@ -1101,26 +1256,42 @@ def render_sidebar():
 
         st.divider()
 
+        st.markdown("### 👤 My Profile")
+        if st.button("✏️ Update My Details", use_container_width=True, disabled=is_admin):
+            st.session_state.show_profile_editor = True
+            st.session_state.show_db_admin = False
+            st.rerun()
+        if is_admin:
+            st.caption("Admin identity stays protected. Use the DB admin tools below for controlled record management.")
+        else:
+            st.caption("Use this to correct your own email, name, department, manager, username, or password.")
+
+        st.divider()
+
         # ── DB Admin ──
         st.markdown("### 🗄️ DB Admin")
         if st.button("📊 Show DB Details", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
+            st.session_state.show_profile_editor = False
             st.session_state.db_admin_mode = "view"
             st.rerun()
         if st.button("🗑️ Delete DB Rows", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
+            st.session_state.show_profile_editor = False
             st.session_state.db_admin_mode = "delete"
             st.rerun()
         if st.button("✏️ Update DB Records", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
+            st.session_state.show_profile_editor = False
             st.session_state.db_admin_mode = "update"
             st.rerun()
         if st.button("✅ Pending Approvals", use_container_width=True, disabled=not is_admin):
             st.session_state.show_db_admin = True
+            st.session_state.show_profile_editor = False
             st.session_state.db_admin_mode = "approvals"
             st.rerun()
         if not is_admin:
-            st.caption("DB admin actions are available only to the admin account.")
+            st.caption("DB admin actions stay restricted to the admin account. Normal users can edit only their own profile above.")
 
         st.divider()
 
@@ -1354,6 +1525,7 @@ def render_main():
     </div>
     """, unsafe_allow_html=True)
 
+    render_profile_editor()
     render_db_admin_panel()
 
     if is_admin:

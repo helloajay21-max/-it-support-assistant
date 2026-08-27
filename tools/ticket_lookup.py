@@ -85,36 +85,41 @@ def _linked_employee_ids(cursor, employee_id: str, profile: dict) -> list[str]:
 
 
 def _org_ticket_snapshot(cursor) -> list[str]:
-    """Build organization-wide open/resolved snapshot across all employee IDs."""
+    """Build organization-wide employee + ticket snapshot across all employee IDs."""
     lines = [
-        "### 🏢 Organization Ticket Snapshot (All EMP IDs)",
-        "| Employee ID | Name | Active | Resolved/Closed | Total | Open Ticket IDs | Resolved Ticket IDs |",
-        "|-------------|------|--------|-----------------|-------|-----------------|---------------------|",
+        "### 🏢 Organization Employee + Ticket Snapshot",
+        "| Employee ID | Name | Email | Department | Status | Active | Resolved/Closed | Total | Open Ticket IDs | Resolved Ticket IDs |",
+        "|-------------|------|-------|------------|--------|--------|-----------------|-------|-----------------|---------------------|",
     ]
     cursor.execute(
         """
         SELECT
-            employee_id,
-            employee_name,
-            SUM(CASE WHEN status IN ('Resolved', 'Closed') THEN 0 ELSE 1 END) AS active_count,
-            SUM(CASE WHEN status IN ('Resolved', 'Closed') THEN 1 ELSE 0 END) AS resolved_count,
-            COUNT(*) AS total_count,
-            GROUP_CONCAT(CASE WHEN status IN ('Resolved', 'Closed') THEN NULL ELSE ticket_id END, ', ') AS open_ticket_ids,
-            GROUP_CONCAT(CASE WHEN status IN ('Resolved', 'Closed') THEN ticket_id ELSE NULL END, ', ') AS resolved_ticket_ids
-        FROM tickets
-        GROUP BY employee_id, employee_name
-        ORDER BY total_count DESC, employee_id
+            e.employee_id,
+            e.name AS employee_name,
+            e.email,
+            e.department,
+            e.status AS employee_status,
+            COALESCE(SUM(CASE WHEN t.ticket_id IS NOT NULL AND t.status NOT IN ('Resolved', 'Closed') THEN 1 ELSE 0 END), 0) AS active_count,
+            COALESCE(SUM(CASE WHEN t.ticket_id IS NOT NULL AND t.status IN ('Resolved', 'Closed') THEN 1 ELSE 0 END), 0) AS resolved_count,
+            COALESCE(COUNT(t.ticket_id), 0) AS total_count,
+            GROUP_CONCAT(CASE WHEN t.status NOT IN ('Resolved', 'Closed') THEN t.ticket_id ELSE NULL END, ', ') AS open_ticket_ids,
+            GROUP_CONCAT(CASE WHEN t.status IN ('Resolved', 'Closed') THEN t.ticket_id ELSE NULL END, ', ') AS resolved_ticket_ids
+        FROM employees e
+        LEFT JOIN tickets t ON t.employee_id = e.employee_id
+        GROUP BY e.employee_id, e.name, e.email, e.department, e.status
+        ORDER BY total_count DESC, e.employee_id
         """
     )
     rows = cursor.fetchall()
     for row in rows:
         lines.append(
-            f"| `{row['employee_id']}` | {row['employee_name']} | "
-            f"{row['active_count']} | {row['resolved_count']} | {row['total_count']} | "
+            f"| `{row['employee_id']}` | {row['employee_name']} | {row['email']} | "
+            f"{row['department']} | {row['employee_status']} | {row['active_count']} | "
+            f"{row['resolved_count']} | {row['total_count']} | "
             f"{(row['open_ticket_ids'] or '—')} | {(row['resolved_ticket_ids'] or '—')} |"
         )
     if len(rows) == 0:
-        lines.append("| — | — | 0 | 0 | 0 | — | — |")
+        lines.append("| — | — | — | — | — | 0 | 0 | 0 | — | — |")
     lines.append("")
     return lines
 
