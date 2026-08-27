@@ -1537,6 +1537,14 @@ def render_main():
         <p>Powered by Agentic AI · Ask me anything about IT support operations</p>
     </div>
     """, unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div style="margin-top:-0.75rem; margin-bottom:1rem; text-align:center; color:#475569; font-size:0.88rem;">
+            © {datetime.now().year} <strong>{PROJECT_NAME}</strong> · Owner: <strong>{OWNER_NAME}</strong> · {OWNER_EMAIL} · {OWNER_BATCH}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     render_profile_editor()
     render_db_admin_panel()
