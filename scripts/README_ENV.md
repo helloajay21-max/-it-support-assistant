@@ -1,4 +1,4 @@
-# Local Environment Setup — IT Support Assistant
+# Local Environment Setup — AI Operations Assistant Using Agentic AI
 
 ## Windows (PowerShell)
 
@@ -29,13 +29,16 @@ Add these as **Secrets** (New repository secret):
 | `RESOURCE_GROUP` | `your-resource-group` | Set in your Azure environment |
 | `WEBAPP_NAME` | `your-webapp-name` | Created by `create_azure_resources.sh` |
 | `OPENAI_API_KEY` | `sk-...` | OpenAI API key |
-| `ADMIN_EMAIL` | `helloajay21@gmail.com` | Admin copy recipient for VPN notifications |
+| `ADMIN_EMAIL` | `helloajay21@gmail.com` | Admin inbox for approval links and VPN copy emails |
+| `ADMIN_PASSWORD` | `your-admin-password` | Admin login password for Ajay Kumar |
+| `APP_BASE_URL` | `https://your-webapp.azurewebsites.net` | Base URL used for approval links |
 | `SMTP_HOST` | `smtp.gmail.com` | SMTP server host |
 | `SMTP_PORT` | `587` | SMTP port |
 | `SMTP_USERNAME` | `your-mailbox@gmail.com` | SMTP login username |
 | `SMTP_PASSWORD` | `app-password-without-spaces` | SMTP app password / relay password |
 | `SMTP_FROM_EMAIL` | `your-mailbox@gmail.com` | Sender mailbox used by the app |
 | `SMTP_USE_TLS` | `true` | Enable STARTTLS |
+| `SMTP_USE_SSL` | `false` | Set `true` for direct SSL on port 465 |
 | `VPN_RESET_BASE_URL` | `https://selfservice.techcorp.com/reset-vpn` | Reset link used in notification emails |
 
 ---
@@ -54,7 +57,7 @@ chmod +x scripts/create_azure_resources.sh
 chmod +x scripts/create_service_principal.sh
 ./scripts/create_service_principal.sh
 
-# 4. Add all secrets to GitHub (see table above), including SMTP_* and ADMIN_EMAIL
+# 4. Add all secrets to GitHub (see table above), including ADMIN_EMAIL, ADMIN_PASSWORD, APP_BASE_URL, and SMTP_*
 
 # 5. Push to main → CI/CD deploys automatically
 git push origin main

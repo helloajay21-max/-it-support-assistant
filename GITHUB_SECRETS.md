@@ -1,4 +1,4 @@
-# GitHub Secrets Setup — IT Support Assistant
+# GitHub Secrets Setup — AI Operations Assistant Using Agentic AI
 # Same pattern as MCP-Project
 
 Go to: GitHub Repo → Settings → Secrets and variables → Actions → New repository secret
@@ -20,6 +20,7 @@ Go to: GitHub Repo → Settings → Secrets and variables → Actions → New re
 | `SMTP_PASSWORD` | SMTP app password / relay password |
 | `SMTP_FROM_EMAIL` | sender mailbox used by the app |
 | `SMTP_USE_TLS` | `true` |
+| `SMTP_USE_SSL` | `false` for STARTTLS / `true` for direct SSL on port 465 |
 | `VPN_RESET_BASE_URL` | `https://selfservice.techcorp.com/reset-vpn` |
 
 The workflow now applies both the Azure runtime settings and the VPN email settings on every deploy, so keep these secrets current.
