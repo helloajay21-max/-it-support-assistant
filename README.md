@@ -55,7 +55,7 @@ An **Agentic AI system** where an LLM acts as an intelligent agent that:
          │                    │                    │
          ▼                    ▼                    ▼
   knowledge_base.json    tickets.db          employees.json
-  (12 KB articles)    (SQLite tickets)     (10 employees)
+  (12 KB articles)    (SQLite tickets)     (Admin + Arti seed users)
 ```
 
 ### LangGraph State
@@ -113,8 +113,8 @@ it-support-assistant/
 │   └── employee_deletion.py          ← Tool 5: Deactivate/delete employees
 │
 ├── data/
-│   ├── init_db.py                    ← DB schema + 8 sample tickets
-│   ├── employees.json                ← 10 sample employees
+│   ├── init_db.py                    ← DB schema + core-user retention logic
+│   ├── employees.json                ← Admin + Arti seed users
 │   ├── knowledge_base.json           ← 12 IT how-to/troubleshooting articles
 │   └── tickets.db                    ← SQLite database (auto-created; includes email_dispatch_log)
 │
@@ -173,7 +173,7 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env — add your API key (see Environment Variables section below)
 
-# 5. Initialize sample database
+# 5. Initialize database
 python data/init_db.py
 
 # 6. Run
