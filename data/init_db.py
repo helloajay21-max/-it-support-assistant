@@ -270,6 +270,86 @@ def _cleanup_password_reset_tokens(conn):
     )
 
 
+def _prefer_employee_record(*employee_ids: str, conn=None) -> str:
+    """Pick the strongest employee record from a set of duplicate rows."""
+    ids = [employee_id for employee_id in employee_ids if employee_id]
+    if not ids:
+        return ""
+    if not conn:
+        raise ValueError("conn is required")
+    cursor = conn.cursor()
+    placeholders = ", ".join("?" for _ in ids)
+    cursor.execute(
+        f"""
+        SELECT employee_id, is_admin, username, password_hash, status, created_at
+        FROM employees
+        WHERE employee_id IN ({placeholders})
+        ORDER BY is_admin DESC,
+                 CASE WHEN password_hash IS NOT NULL THEN 1 ELSE 0 END DESC,
+                 CASE WHEN status = 'Active' THEN 1 ELSE 0 END DESC,
+                 created_at ASC
+        """,
+        ids,
+    )
+    rows = cursor.fetchall()
+    return rows[0]["employee_id"] if rows else ids[0]
+
+
+def _deduplicate_employee_rows(conn):
+    """Repair stale duplicate employee rows before unique indexes are enforced."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT employee_id, email, username
+        FROM employees
+        ORDER BY is_admin DESC, created_at ASC
+        """
+    )
+    rows = cursor.fetchall()
+
+    email_groups = {}
+    username_groups = {}
+    for row in rows:
+        email = (row["email"] or "").strip().lower()
+        username = (row["username"] or "").strip().lower()
+        if email:
+            email_groups.setdefault(email, []).append(row["employee_id"])
+        if username:
+            username_groups.setdefault(username, []).append(row["employee_id"])
+
+    # Deduplicate duplicate emails by keeping the strongest record and removing weaker duplicates.
+    for email, employee_ids in email_groups.items():
+        if len(employee_ids) < 2:
+            continue
+        keep_id = _prefer_employee_record(*employee_ids, conn=conn)
+        for employee_id in employee_ids:
+            if employee_id == keep_id:
+                continue
+            cursor.execute(
+                "UPDATE employees SET email = ? WHERE employee_id = ?",
+                (f"{employee_id.lower()}@duplicate.invalid", employee_id),
+            )
+            cursor.execute(
+                "DELETE FROM employees WHERE employee_id = ? AND employee_id <> ?",
+                (employee_id, keep_id),
+            )
+
+    # Deduplicate duplicate usernames by clearing weaker duplicates and preserving one active username.
+    for username, employee_ids in username_groups.items():
+        if len(employee_ids) < 2:
+            continue
+        keep_id = _prefer_employee_record(*employee_ids, conn=conn)
+        for employee_id in employee_ids:
+            if employee_id == keep_id:
+                continue
+            cursor.execute(
+                "UPDATE employees SET username = NULL WHERE employee_id = ? AND employee_id <> ?",
+                (employee_id, keep_id),
+            )
+
+    conn.commit()
+
+
 def init_db():
     """Initialize the SQLite database with schema and the retained core users."""
     # Ensure the parent directory exists (critical for Azure /home/data/ path)
@@ -315,6 +395,7 @@ def init_db():
         cursor.execute("ALTER TABLE employees ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
     except Exception:
         pass
+    _deduplicate_employee_rows(conn)
     cursor.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_username_unique ON employees(username) WHERE username IS NOT NULL"
     )
