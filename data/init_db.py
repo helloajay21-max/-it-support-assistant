@@ -248,13 +248,25 @@ def _prune_to_core_users(conn):
     cursor = conn.cursor()
     keep_ids = (ADMIN_EMPLOYEE_ID, ARTI_EMPLOYEE_ID)
     placeholders = ",".join("?" for _ in keep_ids)
-    cursor.execute("DELETE FROM password_reset_tokens")
     cursor.execute("DELETE FROM pending_approvals")
     cursor.execute("DELETE FROM email_dispatch_log")
     cursor.execute("DELETE FROM tickets")
     cursor.execute(
         f"DELETE FROM employees WHERE employee_id NOT IN ({placeholders})",
         keep_ids,
+    )
+
+
+def _cleanup_password_reset_tokens(conn):
+    """Delete expired/used password reset tokens while preserving active links."""
+    cursor = conn.cursor()
+    now_iso = datetime.now().isoformat()
+    cursor.execute(
+        "DELETE FROM password_reset_tokens WHERE expires_at < ?",
+        (now_iso,),
+    )
+    cursor.execute(
+        "DELETE FROM password_reset_tokens WHERE used_at IS NOT NULL",
     )
 
 
@@ -423,6 +435,7 @@ def init_db():
 
     _ensure_arti_profile(conn)
     _prune_to_core_users(conn)
+    _cleanup_password_reset_tokens(conn)
 
     sample_tickets = []
 
