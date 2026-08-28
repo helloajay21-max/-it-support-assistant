@@ -248,6 +248,7 @@ def _prune_to_core_users(conn):
     cursor = conn.cursor()
     keep_ids = (ADMIN_EMPLOYEE_ID, ARTI_EMPLOYEE_ID)
     placeholders = ",".join("?" for _ in keep_ids)
+    cursor.execute("DELETE FROM password_reset_tokens")
     cursor.execute("DELETE FROM pending_approvals")
     cursor.execute("DELETE FROM email_dispatch_log")
     cursor.execute("DELETE FROM tickets")
@@ -396,6 +397,24 @@ def init_db():
             notification_shown INTEGER NOT NULL DEFAULT 0
         )
     """)
+
+    # ── Password reset tokens table ──────────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            token      TEXT PRIMARY KEY,
+            employee_id TEXT NOT NULL,
+            email      TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at    TEXT
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_password_reset_employee ON password_reset_tokens(employee_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at)"
+    )
     # Migration: add notification_shown to pre-existing DBs that lack the column
     try:
         cursor.execute("ALTER TABLE pending_approvals ADD COLUMN notification_shown INTEGER NOT NULL DEFAULT 0")

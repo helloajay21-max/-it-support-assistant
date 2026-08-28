@@ -31,7 +31,7 @@ Add these as **Secrets** (New repository secret):
 | `OPENAI_API_KEY` | `sk-...` | OpenAI API key |
 | `ADMIN_EMAIL` | `helloajay21@gmail.com` | Admin inbox for approval links and VPN copy emails |
 | `ADMIN_PASSWORD` | `your-admin-password` | Admin login password for Ajay Kumar |
-| `APP_BASE_URL` | `https://your-webapp.azurewebsites.net` | Base URL used for approval links |
+| `APP_BASE_URL` | `https://your-webapp.azurewebsites.net` | Base URL used for approval links and forgot-password reset links |
 | `SMTP_HOST` | `smtp.gmail.com` | SMTP server host |
 | `SMTP_PORT` | `587` | SMTP port |
 | `SMTP_USERNAME` | `your-mailbox@gmail.com` | SMTP login username |

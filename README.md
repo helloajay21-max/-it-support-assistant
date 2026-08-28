@@ -215,6 +215,7 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 | `ENABLE_FILE_LOG` | ❌ | `false` | Write logs to `logs/` directory |
 | `ADMIN_EMAIL` | ❌ | `helloajay21@gmail.com` | Admin inbox for approval notifications; only this admin can approve or reject requests in the dashboard |
 | `ADMIN_PASSWORD` | ❌ | _(empty)_ | Admin login password used for Ajay Kumar's secure approval access |
+| `APP_BASE_URL` | ❌ | `http://localhost:8501` | Base URL used in email links for approval actions and forgot-password reset |
 
 Normal users can correct their own stored profile details from the **Update My Details** screen after login. This is the recommended way to fix an invalid email address so response emails and approval notifications can be delivered correctly.
 
@@ -281,6 +282,7 @@ Add these **Secrets**:
 | `OPENAI_API_KEY` | OpenAI API key used by the assistant |
 | `ADMIN_EMAIL` | Admin inbox for approval links and VPN copy emails |
 | `ADMIN_PASSWORD` | Admin login password for Ajay Kumar |
+| `APP_BASE_URL` | Public app URL used in approval and forgot-password email links |
 | `SMTP_HOST` | SMTP host, e.g. `smtp.gmail.com` |
 | `SMTP_PORT` | SMTP port, e.g. `587` |
 | `SMTP_USERNAME` | SMTP login username |

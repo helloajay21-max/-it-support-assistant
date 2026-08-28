@@ -5,10 +5,11 @@ Provides a chat interface with conversation history and tool visibility.
 
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import streamlit as st
@@ -34,6 +35,7 @@ DEFAULT_EMPLOYEE_ID = ADMIN_EMP_ID
 OWNER_NAME = "Ajay Kumar"
 OWNER_EMAIL = "helloajay21@gmail.com"
 OWNER_BATCH = "Batch 1"
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8501").strip().rstrip("/")
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
 # ── Page Configuration ────────────────────────────────────────────────────────
@@ -235,6 +237,176 @@ def _password_validation_error(password: str) -> str:
     return ""
 
 
+def _build_query_link(query_key: str, token: str) -> str:
+    """Build an absolute app URL with a query parameter token."""
+    base = APP_BASE_URL or "http://localhost:8501"
+    return f"{base}/?{query_key}={token}"
+
+
+def _request_password_reset(identifier: str) -> tuple[bool, str]:
+    """
+    Create and email a one-time password reset link for an existing user.
+    Returns a generic success message for unknown users to reduce account enumeration risk.
+    """
+    identifier = (identifier or "").strip().lower()
+    if not identifier:
+        return False, "Enter your username or email."
+
+    generic_msg = "If this account exists, a password reset link has been sent to the registered email."
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT employee_id, name, email, status
+            FROM employees
+            WHERE LOWER(COALESCE(username, '')) = LOWER(?) OR LOWER(email) = LOWER(?)
+            LIMIT 1
+            """,
+            (identifier, identifier),
+        )
+        user_row = cursor.fetchone()
+        if not user_row:
+            conn.close()
+            return True, generic_msg
+
+        user = dict(user_row)
+        email = (user.get("email") or "").strip().lower()
+        if user.get("status") != "Active" or not EMAIL_RE.match(email):
+            conn.close()
+            return True, generic_msg
+
+        token = secrets.token_urlsafe(32)
+        now = datetime.now()
+        expires_at = now + timedelta(minutes=30)
+        cursor.execute(
+            """
+            INSERT INTO password_reset_tokens (token, employee_id, email, created_at, expires_at, used_at)
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (token, user["employee_id"], email, now.isoformat(), expires_at.isoformat()),
+        )
+        conn.commit()
+
+        reset_link = _build_query_link("reset_password", token)
+        subject = f"{PROJECT_NAME} — Password Reset Link"
+        body = (
+            f"Hello {user.get('name') or 'User'},\n\n"
+            "We received a request to reset your login password.\n\n"
+            f"Reset link (valid for 30 minutes):\n{reset_link}\n\n"
+            "If you did not request this, you can ignore this email.\n"
+            "For your security, never share this link with anyone.\n\n"
+            f"---\n{PROJECT_NAME}"
+        )
+
+        from agent.nodes import _send_email
+
+        sent_ok, err = _send_email(email, subject, body)
+        if not sent_ok:
+            cursor.execute("DELETE FROM password_reset_tokens WHERE token = ?", (token,))
+            conn.commit()
+            conn.close()
+            return False, f"Could not send reset email right now: {err}"
+
+        conn.close()
+        return True, generic_msg
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Forgot password request failed: %s", exc, exc_info=True)
+        return False, "Could not process forgot password request right now."
+
+
+def _reset_password_with_token(token: str, new_password: str) -> tuple[bool, str]:
+    """Validate a reset token and set a new password hash."""
+    token = (token or "").strip()
+    if not token:
+        return False, "Invalid reset link."
+
+    password_error = _password_validation_error(new_password)
+    if password_error:
+        return False, password_error
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT token, employee_id, email, expires_at, used_at
+            FROM password_reset_tokens
+            WHERE token = ?
+            LIMIT 1
+            """,
+            (token,),
+        )
+        token_row = cursor.fetchone()
+        if not token_row:
+            conn.close()
+            return False, "This reset link is invalid or already used."
+
+        token_data = dict(token_row)
+        if token_data.get("used_at"):
+            conn.close()
+            return False, "This reset link was already used."
+
+        expires_raw = token_data.get("expires_at") or ""
+        try:
+            expires_at = datetime.fromisoformat(expires_raw)
+        except Exception:
+            expires_at = datetime.now() - timedelta(minutes=1)
+        if datetime.now() > expires_at:
+            cursor.execute(
+                "UPDATE password_reset_tokens SET used_at = ? WHERE token = ?",
+                (datetime.now().isoformat(), token),
+            )
+            conn.commit()
+            conn.close()
+            return False, "This reset link has expired. Request a new one."
+
+        cursor.execute(
+            "SELECT employee_id, status FROM employees WHERE employee_id = ? LIMIT 1",
+            (token_data["employee_id"],),
+        )
+        employee_row = cursor.fetchone()
+        if not employee_row or employee_row["status"] != "Active":
+            conn.close()
+            return False, "This account is not active. Contact the admin."
+
+        cursor.execute(
+            "UPDATE employees SET password_hash = ? WHERE employee_id = ?",
+            (hash_password(new_password), token_data["employee_id"]),
+        )
+        now_text = datetime.now().isoformat()
+        cursor.execute(
+            "UPDATE password_reset_tokens SET used_at = ? WHERE token = ?",
+            (now_text, token),
+        )
+        cursor.execute(
+            """
+            UPDATE password_reset_tokens
+            SET used_at = ?
+            WHERE employee_id = ? AND used_at IS NULL AND token <> ?
+            """,
+            (now_text, token_data["employee_id"], token),
+        )
+        conn.commit()
+        conn.close()
+        return True, "✅ Password reset successful. Please log in with your new password."
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Password reset failed: %s", exc, exc_info=True)
+        return False, "Could not reset password right now. Please request a new reset email."
+
+
 def _create_user_account(
     name: str,
     email: str,
@@ -424,7 +596,7 @@ def render_auth_page() -> None:
     if not admin_password_configured:
         st.warning("Admin login password is not configured yet. Set ADMIN_PASSWORD in environment/GitHub Secrets for Ajay admin login.")
 
-    login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
+    login_tab, signup_tab, forgot_tab = st.tabs(["Login", "Sign Up", "Forgot Password"])
 
     with login_tab:
         with st.form("login_form", clear_on_submit=False):
@@ -457,6 +629,18 @@ def render_auth_page() -> None:
                     st.success(f"✅ Account created successfully. Your Employee ID is {msg}. You can now log in.")
                 else:
                     st.error(msg)
+
+    with forgot_tab:
+        st.caption("Request a one-time password reset link to your registered email address.")
+        with st.form("forgot_password_form", clear_on_submit=False):
+            forgot_identifier = st.text_input("Username or email")
+            forgot_submitted = st.form_submit_button("📨 Send reset link", type="primary", use_container_width=True)
+        if forgot_submitted:
+            ok, msg = _request_password_reset(forgot_identifier)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
     st.markdown(
         f"""
@@ -1731,12 +1915,53 @@ def render_approval_callback() -> None:
         st.rerun()
 
 
+def render_password_reset_page() -> None:
+    """Render the one-time password reset page from email link token."""
+    token = (st.query_params.get("reset_password") or "").strip()
+    st.markdown(f"""
+    <div class="main-header">
+        <h1>🔑 {PROJECT_NAME} — Password Reset</h1>
+        <p>Set a new login password using your secure email link</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not token:
+        st.error("❌ Invalid reset link.")
+        if st.button("Go to Login", use_container_width=True):
+            st.query_params.clear()
+            st.rerun()
+        return
+
+    with st.form("reset_password_form", clear_on_submit=True):
+        new_password = st.text_input("New password", type="password")
+        confirm_password = st.text_input("Confirm new password", type="password")
+        submitted = st.form_submit_button("🔐 Reset Password", type="primary", use_container_width=True)
+    if submitted:
+        if new_password != confirm_password:
+            st.error("Passwords do not match.")
+        else:
+            ok, msg = _reset_password_with_token(token, new_password)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+    st.caption("Password must be at least 8 characters and include uppercase, lowercase, and a number.")
+    if st.button("Back to Login", use_container_width=True):
+        st.query_params.clear()
+        st.rerun()
+
+
 # ── Entry Point ───────────────────────────────────────────────────────────────
 def main():
     init_session_state()
     ensure_db()
 
     params = st.query_params
+    if "reset_password" in params:
+        render_password_reset_page()
+        return
+
     if not st.session_state.get("authenticated"):
         if not st.session_state.get("db_initialized"):
             return
