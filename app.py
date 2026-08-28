@@ -35,7 +35,6 @@ DEFAULT_EMPLOYEE_ID = ADMIN_EMP_ID
 OWNER_NAME = "Ajay Kumar"
 OWNER_EMAIL = "helloajay21@gmail.com"
 OWNER_BATCH = "Batch 1"
-APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8501").strip().rstrip("/")
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
 # ── Page Configuration ────────────────────────────────────────────────────────
@@ -239,7 +238,27 @@ def _password_validation_error(password: str) -> str:
 
 def _build_query_link(query_key: str, token: str) -> str:
     """Build an absolute app URL with a query parameter token."""
-    base = APP_BASE_URL or "http://localhost:8501"
+    def _normalized_url(raw_url: str) -> str:
+        cleaned = (raw_url or "").strip().rstrip("/")
+        if not cleaned:
+            return ""
+        if not re.match(r"^https?://", cleaned, re.IGNORECASE):
+            cleaned = f"https://{cleaned.lstrip('/')}"
+        return cleaned.rstrip("/")
+
+    configured_url = _normalized_url(os.getenv("APP_BASE_URL", ""))
+    website_host = (os.getenv("WEBSITE_HOSTNAME", "") or "").strip().rstrip("/")
+    platform_url = f"https://{website_host}" if website_host else ""
+
+    if configured_url:
+        if website_host and ("localhost" in configured_url.lower() or "127.0.0.1" in configured_url):
+            base = platform_url or configured_url
+        else:
+            base = configured_url
+    elif platform_url:
+        base = platform_url
+    else:
+        base = "http://localhost:8501"
     return f"{base}/?{query_key}={token}"
 
 

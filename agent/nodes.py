@@ -274,7 +274,12 @@ def _send_admin_approval_email(
 ) -> tuple[bool, str]:
     """Send approval-request email to IT admin with approve/reject links."""
     admin_email = os.getenv("ADMIN_EMAIL", "helloajay21@gmail.com").strip()
-    app_base_url = os.getenv("APP_BASE_URL", "http://localhost:8501").rstrip("/")
+    app_base_url = (os.getenv("APP_BASE_URL", "") or "").strip().rstrip("/")
+    website_host = (os.getenv("WEBSITE_HOSTNAME", "") or "").strip().rstrip("/")
+    if app_base_url and not re.match(r"^https?://", app_base_url, re.IGNORECASE):
+        app_base_url = f"https://{app_base_url.lstrip('/')}"
+    if (not app_base_url) or (website_host and ("localhost" in app_base_url.lower() or "127.0.0.1" in app_base_url)):
+        app_base_url = f"https://{website_host}" if website_host else (app_base_url or "http://localhost:8501")
     approve_url = f"{app_base_url}/?approve={approval_id}"
     reject_url  = f"{app_base_url}/?reject={approval_id}"
     subject = (
