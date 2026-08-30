@@ -1227,6 +1227,48 @@ def _update_approval_status(token: str, status: str, result_message: str = "") -
         logger.error("Failed to update approval status: %s", exc)
 
 
+def _mark_ticket_resolved_after_approval(ticket_id: str, approval: dict) -> tuple[bool, str]:
+    """Mark an approved ticket as resolved so admin-executed work is reflected consistently."""
+    ticket_id = (ticket_id or "").strip().upper()
+    if not ticket_id:
+        return False, "Ticket ID missing."
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        now_iso = datetime.now().isoformat()
+        resolution_notes = (
+            f"Approved and completed by admin for "
+            f"{approval.get('request_type', 'ticket request').replace('_', ' ').title()}."
+        )
+        cursor.execute(
+            """
+            UPDATE tickets
+            SET status = 'Resolved',
+                updated_at = ?,
+                resolved_at = ?,
+                assigned_to = COALESCE(NULLIF(assigned_to, ''), ?),
+                resolution_notes = ?
+            WHERE ticket_id = ?
+            """,
+            (now_iso, now_iso, ADMIN_NAME, resolution_notes, ticket_id),
+        )
+        updated = int(cursor.rowcount)
+        conn.commit()
+        conn.close()
+        if updated == 0:
+            return False, f"Ticket {ticket_id} was not found."
+        return True, resolution_notes
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Failed to resolve approved ticket %s: %s", ticket_id, exc, exc_info=True)
+        return False, str(exc)
+
+
 def _execute_approved_action(approval: dict) -> tuple[bool, str]:
     """Execute the stored action for an approved request and notify the employee."""
     import json as _json
@@ -1247,6 +1289,16 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
                 "category":    data.get("category", "Other"),
                 "priority":    data.get("priority", "Medium"),
             })
+            ticket_match = re.search(r"\bTKT-\d{4}-\d{3,}\b", str(result_msg))
+            if ticket_match and "✅" in str(result_msg):
+                resolved_ok, resolved_msg = _mark_ticket_resolved_after_approval(ticket_match.group(0), approval)
+                if not resolved_ok:
+                    return False, f"{result_msg}\n\nApproved ticket could not be finalized as resolved: {resolved_msg}"
+                result_msg = (
+                    f"{result_msg}\n\n"
+                    f"✅ Admin approval completed the request and marked ticket "
+                    f"**{ticket_match.group(0)}** as **Resolved**."
+                )
 
         elif request_type == "EMPLOYEE_REGISTRATION":
             from tools.employee_registration import create_employee
