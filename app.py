@@ -2242,6 +2242,7 @@ def render_approval_callback() -> None:
     params  = st.query_params
     token   = _query_param_value("approve") or _query_param_value("reject")
     is_approve = "approve" in params
+    auto_execute = _query_param_value("execute") == "1"
 
     st.markdown(f"""
     <div class="main-header">
@@ -2305,28 +2306,48 @@ def render_approval_callback() -> None:
     st.json(request_data)
 
     btn_type = "primary" if is_approve else "secondary"
+    action_label = f"{'✅ Approve & Execute' if is_approve else '❌ Reject Request'}"
+
+    def _run_approval_action() -> tuple[bool, str]:
+        if is_approve:
+            _update_approval_status(token, "Approved", "")
+            ok, msg = _execute_approved_action(approval)
+            if not ok:
+                _update_approval_status(token, "Failed", msg)
+            return ok, msg
+        _update_approval_status(token, "Rejected", "Rejected by admin via email link")
+        _notify_employee_both_ways(approval, "", approved=False)
+        return True, "Rejected by admin"
+
+    if auto_execute:
+        with st.spinner("Executing action from email link…"):
+            ok, msg = _run_approval_action()
+        _set_query_param("execute", None)
+        if ok:
+            if is_approve:
+                st.success(f"✅ **Approved & Executed**\n\n{str(msg)[:400]}")
+                st.info("📧 Employee notified via email and in-app notification.")
+            else:
+                st.warning("❌ Request rejected. Employee has been notified via email and in-app.")
+        else:
+            st.error(f"❌ Execution failed: {msg}")
+        return
 
     st.divider()
     if st.button(
-        f"{'✅ Approve & Execute' if is_approve else '❌ Reject Request'}",
+        action_label,
         type=btn_type,
         use_container_width=True,
     ):
+        with st.spinner("Executing action…"):
+            ok, msg = _run_approval_action()
         if is_approve:
-            with st.spinner("Executing approved action…"):
-                # Set status first so the in-app notification query sees 'Approved'
-                _update_approval_status(token, "Approved", "")
-                ok, msg = _execute_approved_action(approval)
-            if not ok:
-                _update_approval_status(token, "Failed", msg)
             if ok:
                 st.success(f"✅ **Approved & Executed**\n\n{msg[:400]}")
                 st.info("📧 Employee notified via email and in-app notification.")
             else:
                 st.error(f"❌ Execution failed: {msg}")
         else:
-            _update_approval_status(token, "Rejected", "Rejected by admin via email link")
-            _notify_employee_both_ways(approval, "", approved=False)
             st.warning("❌ Request rejected. Employee has been notified via email and in-app.")
 
     st.divider()

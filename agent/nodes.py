@@ -280,8 +280,8 @@ def _send_admin_approval_email(
         app_base_url = f"https://{app_base_url.lstrip('/')}"
     if (not app_base_url) or (website_host and ("localhost" in app_base_url.lower() or "127.0.0.1" in app_base_url)):
         app_base_url = f"https://{website_host}" if website_host else (app_base_url or "http://localhost:8501")
-    approve_url = f"{app_base_url}/?approve={approval_id}"
-    reject_url  = f"{app_base_url}/?reject={approval_id}"
+    approve_url = f"{app_base_url}/?approve={approval_id}&execute=1"
+    reject_url  = f"{app_base_url}/?reject={approval_id}&execute=1"
     subject = (
         f"[IT Support] Approval Required: "
         f"{request_type.replace('_', ' ').title()} — {employee_id}"
