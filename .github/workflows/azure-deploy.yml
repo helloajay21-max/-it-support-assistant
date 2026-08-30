@@ -58,6 +58,7 @@ jobs:
               WEBSITES_PORT=8501 \
               WEBSITES_ENABLE_APP_SERVICE_STORAGE=true \
               SQLITE_DB_PATH=/home/data/tickets.db \
+              RESET_TO_CORE_USERS=false \
               LOG_LEVEL=INFO \
               ADMIN_EMAIL="${{ secrets.ADMIN_EMAIL }}" \
               APP_BASE_URL="${{ secrets.APP_BASE_URL }}"
