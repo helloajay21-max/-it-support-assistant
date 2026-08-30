@@ -148,6 +148,7 @@ def init_session_state():
         "current_employee_id": None,
         "auth_username": None,
         "auth_session_token": None,
+        "force_clear_browser_auth": False,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -172,6 +173,52 @@ def _set_query_param(key: str, value: Optional[str]) -> None:
         st.query_params[key] = value
     elif key in st.query_params:
         del st.query_params[key]
+
+
+def _query_param_value(key: str) -> str:
+    """Read a query param as a normalized single string."""
+    raw = st.query_params.get(key)
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else ""
+    return (raw or "").strip()
+
+
+def _bootstrap_auth_query_param_from_browser() -> None:
+    """Sync auth_session between URL and browser localStorage for refresh resilience."""
+    current_token = _query_param_value(AUTH_QUERY_PARAM)
+    clear_browser_auth = "1" if st.session_state.get("force_clear_browser_auth") else "0"
+    st.components.v1.html(
+        f"""
+        <script>
+        (function() {{
+          const key = "it_support_auth_session";
+          const clear = "{clear_browser_auth}" === "1";
+          const params = new URLSearchParams(window.location.search);
+          const current = params.get("{AUTH_QUERY_PARAM}");
+          if (clear) {{
+            try {{ localStorage.removeItem(key); }} catch (e) {{}}
+            return;
+          }}
+          if (current) {{
+            try {{
+              if (localStorage.getItem(key) !== current) localStorage.setItem(key, current);
+            }} catch (e) {{}}
+            return;
+          }}
+          let saved = null;
+          try {{ saved = localStorage.getItem(key); }} catch (e) {{}}
+          if (!saved) return;
+          params.set("{AUTH_QUERY_PARAM}", saved);
+          const q = params.toString();
+          const target = window.location.pathname + (q ? "?" + q : "") + window.location.hash;
+          window.location.replace(target);
+        }})();
+        </script>
+        """,
+        height=0,
+    )
+    if current_token:
+        st.session_state.force_clear_browser_auth = False
 
 
 def _clear_navigation_query_params() -> None:
@@ -206,7 +253,7 @@ def _create_login_session(employee_id: str, auth_username: str) -> str:
 
 def _restore_login_session() -> bool:
     """Restore login from a persisted auth query param if still valid."""
-    token = (st.query_params.get(AUTH_QUERY_PARAM) or "").strip()
+    token = _query_param_value(AUTH_QUERY_PARAM)
     if not token or st.session_state.get("authenticated"):
         return False
     conn = None
@@ -248,6 +295,7 @@ def _restore_login_session() -> bool:
             or session_row.get("email")
         )
         st.session_state.auth_session_token = token
+        st.session_state.force_clear_browser_auth = False
         conn.close()
         return True
     except Exception as exc:
@@ -766,6 +814,7 @@ def _login_user(identifier: str, password: str) -> tuple[bool, str]:
         st.session_state.current_employee_id = profile["employee_id"]
         st.session_state.auth_username = auth_username
         st.session_state.auth_session_token = session_token
+        st.session_state.force_clear_browser_auth = False
         _set_query_param(AUTH_QUERY_PARAM, session_token)
         _reset_conversation_state()
         return True, profile["employee_id"]
@@ -788,6 +837,7 @@ def _logout_user() -> None:
     st.session_state.current_employee_id = None
     st.session_state.auth_username = None
     st.session_state.auth_session_token = None
+    st.session_state.force_clear_browser_auth = True
     st.session_state.show_db_admin = False
     st.session_state.db_admin_mode = "view"
     st.session_state.show_profile_editor = False
@@ -2165,7 +2215,7 @@ def render_approval_callback() -> None:
     Triggered when the app URL contains ?approve=TOKEN or ?reject=TOKEN.
     """
     params  = st.query_params
-    token   = params.get("approve") or params.get("reject")
+    token   = _query_param_value("approve") or _query_param_value("reject")
     is_approve = "approve" in params
 
     st.markdown(f"""
@@ -2262,7 +2312,7 @@ def render_approval_callback() -> None:
 
 def render_password_reset_page() -> None:
     """Render the one-time password reset page from email link token."""
-    token = (st.query_params.get("reset_password") or "").strip()
+    token = _query_param_value("reset_password")
     st.markdown(f"""
     <div class="main-header">
         <h1>🔑 {PROJECT_NAME} — Password Reset</h1>
@@ -2301,6 +2351,7 @@ def render_password_reset_page() -> None:
 def main():
     init_session_state()
     ensure_db()
+    _bootstrap_auth_query_param_from_browser()
 
     params = st.query_params
     if "reset_password" in params:
