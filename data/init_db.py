@@ -286,6 +286,102 @@ def _cleanup_login_sessions(conn):
     )
 
 
+def _reconcile_approved_ticket_requests(conn):
+    """
+    Backfill older approved ticket requests that were created before
+    the explicit resolved-status update was implemented.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT approval_id, employee_id, request_data, requested_at, resolved_at
+            FROM pending_approvals
+            WHERE request_type = 'TICKET_CREATION'
+              AND status = 'Approved'
+            ORDER BY requested_at ASC
+            """
+        )
+        approvals = cursor.fetchall()
+    except sqlite3.OperationalError:
+        return
+
+    for approval in approvals:
+        employee_id = (approval["employee_id"] or "").strip().upper()
+        if not employee_id:
+            continue
+
+        try:
+            request_data = json.loads(approval["request_data"] or "{}")
+        except Exception:
+            request_data = {}
+
+        title = (request_data.get("title") or "").strip()
+        description = (request_data.get("description") or "").strip()
+        category = (request_data.get("category") or "Other").strip()
+        priority = (request_data.get("priority") or "Medium").strip()
+        requested_at = (approval["requested_at"] or "").strip()
+        resolved_at = (approval["resolved_at"] or datetime.now().isoformat()).strip()
+
+        if not title or not description:
+            continue
+
+        cursor.execute(
+            """
+            SELECT ticket_id, status
+            FROM tickets
+            WHERE employee_id = ?
+              AND title = ?
+              AND description = ?
+              AND category = ?
+              AND priority = ?
+              AND created_at >= ?
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (employee_id, title, description, category, priority, requested_at or "0000-01-01T00:00:00"),
+        )
+        ticket_row = cursor.fetchone()
+
+        if not ticket_row:
+            cursor.execute(
+                """
+                SELECT ticket_id, status
+                FROM tickets
+                WHERE employee_id = ?
+                  AND title = ?
+                  AND description = ?
+                  AND category = ?
+                  AND priority = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (employee_id, title, description, category, priority),
+            )
+            ticket_row = cursor.fetchone()
+
+        if not ticket_row:
+            continue
+        if ticket_row["status"] in ("Resolved", "Closed"):
+            continue
+
+        resolution_notes = (
+            "Backfilled resolution: this ticket was approved and executed by admin."
+        )
+        cursor.execute(
+            """
+            UPDATE tickets
+            SET status = 'Resolved',
+                updated_at = ?,
+                resolved_at = COALESCE(NULLIF(resolved_at, ''), ?),
+                assigned_to = COALESCE(NULLIF(assigned_to, ''), ?),
+                resolution_notes = COALESCE(NULLIF(resolution_notes, ''), ?)
+            WHERE ticket_id = ?
+            """,
+            (resolved_at, resolved_at, "Ajay Kumar", resolution_notes, ticket_row["ticket_id"]),
+        )
+
+
 def _prefer_employee_record(*employee_ids: str, conn=None) -> str:
     """Pick the strongest employee record from a set of duplicate rows."""
     ids = [employee_id for employee_id in employee_ids if employee_id]
@@ -549,6 +645,7 @@ def init_db():
     _ensure_arti_profile(conn)
     if _should_reset_to_core_users():
         _prune_to_core_users(conn)
+    _reconcile_approved_ticket_requests(conn)
     _cleanup_password_reset_tokens(conn)
     _cleanup_login_sessions(conn)
 
