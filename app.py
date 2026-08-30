@@ -36,6 +36,15 @@ OWNER_NAME = "Ajay Kumar"
 OWNER_EMAIL = "helloajay21@gmail.com"
 OWNER_BATCH = "Batch 1"
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+DEPARTMENT_OPTIONS = [
+    "Engineering", "IT", "Finance", "HR", "Sales",
+    "Marketing", "Operations", "Legal", "Product", "Design", "Other",
+]
+DEFAULT_MANAGER_OPTIONS = [
+    "Ajay Kumar",
+    "Carol Davis",
+]
+MANAGER_OTHER_OPTION = "Manager not listed - enter manually"
 
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -234,6 +243,80 @@ def _password_validation_error(password: str) -> str:
     if not re.search(r"\d", password):
         return "Password must include at least one number."
     return ""
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    """Return unique non-empty strings while preserving first-seen order."""
+    unique_values = []
+    seen = set()
+    for value in values:
+        cleaned = (value or "").strip()
+        lowered = cleaned.lower()
+        if not cleaned or cleaned.upper() == "N/A" or lowered in seen:
+            continue
+        seen.add(lowered)
+        unique_values.append(cleaned)
+    return unique_values
+
+
+def _option_index(options: list[str], preferred: str, fallback: int = 0) -> int:
+    """Return the matching option index using case-insensitive comparison."""
+    target = (preferred or "").strip().lower()
+    if target:
+        for idx, option in enumerate(options):
+            if option.strip().lower() == target:
+                return idx
+    if not options:
+        return 0
+    if fallback < 0:
+        return fallback
+    return fallback if fallback < len(options) else 0
+
+
+def _department_select_options() -> list[str]:
+    """Return supported department options plus any existing DB values."""
+    options = list(DEPARTMENT_OPTIONS)
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT DISTINCT department
+            FROM employees
+            WHERE TRIM(COALESCE(department, '')) <> ''
+            ORDER BY department
+            """
+        )
+        db_departments = [row["department"] for row in cursor.fetchall()]
+        conn.close()
+        return _dedupe_preserve_order(options + db_departments)
+    except Exception:
+        return options
+
+
+def _manager_select_options() -> list[str]:
+    """Return known managers based on seeded defaults and current DB profiles."""
+    options = list(DEFAULT_MANAGER_OPTIONS)
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT name, manager_name
+            FROM employees
+            WHERE status = 'Active'
+            ORDER BY name
+            """
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        db_names = []
+        for row in rows:
+            db_names.append(row["name"])
+            db_names.append(row["manager_name"])
+        return _dedupe_preserve_order(options + db_names)
+    except Exception:
+        return options
 
 
 def _build_query_link(query_key: str, token: str) -> str:
@@ -630,11 +713,25 @@ def render_auth_page() -> None:
             st.error(msg)
 
     with signup_tab:
+        signup_department_options = _department_select_options()
+        signup_manager_options = _manager_select_options()
+        signup_manager_choices = signup_manager_options + [MANAGER_OTHER_OPTION]
         with st.form("signup_form", clear_on_submit=False):
             name = st.text_input("Full name")
             email = st.text_input("Email")
-            department = st.text_input("Department")
-            manager_name = st.text_input("Manager name")
+            department = st.selectbox(
+                "Department",
+                signup_department_options,
+                index=_option_index(signup_department_options, "IT"),
+            )
+            selected_manager = st.selectbox(
+                "Manager name",
+                signup_manager_choices,
+                index=_option_index(signup_manager_choices, ADMIN_NAME),
+            )
+            manager_name = selected_manager
+            if selected_manager == MANAGER_OTHER_OPTION:
+                manager_name = st.text_input("Enter manager name")
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             confirm_password = st.text_input("Confirm password", type="password")
@@ -904,11 +1001,32 @@ def render_profile_editor() -> None:
             st.error(text)
         st.session_state.profile_editor_message = None
 
+    profile_department_options = _department_select_options()
+    profile_manager_options = _manager_select_options()
+    current_manager_name = (current_profile.get("manager_name") or "").strip()
+    profile_manager_choices = profile_manager_options + [MANAGER_OTHER_OPTION]
+    manager_index = (
+        _option_index(profile_manager_choices, MANAGER_OTHER_OPTION)
+        if current_manager_name and _option_index(profile_manager_options, current_manager_name, -1) == -1
+        else _option_index(profile_manager_choices, current_manager_name or ADMIN_NAME)
+    )
+
     with st.form("self_profile_update_form"):
         new_name = st.text_input("Full name", value=current_profile.get("name", ""))
         new_email = st.text_input("Email", value=current_profile.get("email", ""))
-        new_dept = st.text_input("Department", value=current_profile.get("department", ""))
-        new_manager = st.text_input("Manager name", value=current_profile.get("manager_name", ""))
+        new_dept = st.selectbox(
+            "Department",
+            profile_department_options,
+            index=_option_index(profile_department_options, current_profile.get("department", "")),
+        )
+        selected_manager = st.selectbox(
+            "Manager name",
+            profile_manager_choices,
+            index=manager_index,
+        )
+        new_manager = selected_manager
+        if selected_manager == MANAGER_OTHER_OPTION:
+            new_manager = st.text_input("Enter manager name", value=current_manager_name)
         new_username = st.text_input(
             "Username",
             value=(current_profile.get("username") or st.session_state.get("auth_username") or ""),
