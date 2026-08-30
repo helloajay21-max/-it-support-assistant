@@ -1319,6 +1319,68 @@ def _mark_ticket_resolved_after_approval(ticket_id: str, approval: dict) -> tupl
         return False, str(exc)
 
 
+def _find_existing_ticket_for_approval(approval: dict, employee_id: str, payload: dict) -> Optional[dict]:
+    """Find an existing ticket for the same approved request to prevent duplicates on re-approval."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        title = (payload.get("title") or "").strip()
+        description = (payload.get("description") or "").strip()
+        category = (payload.get("category") or "").strip()
+        priority = (payload.get("priority") or "").strip()
+        requested_at = (approval.get("requested_at") or "").strip()
+
+        cursor.execute(
+            """
+            SELECT ticket_id, status, created_at
+            FROM tickets
+            WHERE employee_id = ?
+              AND LOWER(TRIM(title)) = LOWER(TRIM(?))
+              AND LOWER(TRIM(description)) = LOWER(TRIM(?))
+              AND LOWER(TRIM(category)) = LOWER(TRIM(?))
+              AND LOWER(TRIM(priority)) = LOWER(TRIM(?))
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (employee_id, title, description, category, priority),
+        )
+        row = cursor.fetchone()
+        if row:
+            conn.close()
+            return dict(row)
+
+        if requested_at:
+            cursor.execute(
+                """
+                SELECT ticket_id, status, created_at
+                FROM tickets
+                WHERE employee_id = ?
+                  AND LOWER(TRIM(title)) = LOWER(TRIM(?))
+                  AND LOWER(TRIM(category)) = LOWER(TRIM(?))
+                  AND created_at >= ?
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (employee_id, title, category, requested_at),
+            )
+            row = cursor.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+
+        conn.close()
+        return None
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Failed duplicate check for approval %s: %s", approval.get("approval_id", ""), exc)
+        return None
+
+
 def _execute_approved_action(approval: dict) -> tuple[bool, str]:
     """Execute the stored action for an approved request and notify the employee."""
     import json as _json
@@ -1372,6 +1434,19 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
             if not employee_id:
                 return False, "Execution error: employee_id missing in approval payload."
             normalized = _normalized_ticket_payload(data)
+            existing_ticket = _find_existing_ticket_for_approval(approval, employee_id, normalized)
+            if existing_ticket:
+                ticket_id = existing_ticket["ticket_id"]
+                if existing_ticket.get("status") not in ("Resolved", "Closed"):
+                    resolved_ok, resolved_msg = _mark_ticket_resolved_after_approval(ticket_id, approval)
+                    if not resolved_ok:
+                        return False, f"Found existing ticket {ticket_id}, but could not mark it resolved: {resolved_msg}"
+                result_msg = (
+                    f"✅ Existing approved ticket already present: **{ticket_id}**.\n\n"
+                    f"No duplicate ticket was created. The existing ticket was used for this approval execution."
+                )
+                _notify_employee_both_ways(approval, str(result_msg), approved=True)
+                return True, str(result_msg)
             result_msg = ticket_creation.invoke({
                 "employee_id": employee_id,
                 "title":       normalized["title"],
@@ -1601,52 +1676,83 @@ def _render_pending_approval_actions(widget_prefix: str, show_all_rows: bool = T
 
     approval_rows = _fetch_db_rows("pending_approvals")
     pending_rows = [r for r in approval_rows if r.get("status") == "Pending"]
+    failed_rows = [r for r in approval_rows if r.get("status") == "Failed"]
 
-    if not pending_rows:
+    if not pending_rows and not failed_rows:
         st.success("✅ No pending approvals - all caught up!")
         if show_all_rows:
             st.dataframe(approval_rows, use_container_width=True, hide_index=True)
         return
 
-    st.warning(f"⏳ {len(pending_rows)} request(s) awaiting approval")
+    if pending_rows:
+        st.warning(f"⏳ {len(pending_rows)} request(s) awaiting approval")
+    if failed_rows:
+        st.error(f"⚠️ {len(failed_rows)} request(s) failed earlier and can be re-approved.")
+    actionable_rows = pending_rows + failed_rows
     st.dataframe(
-        approval_rows if show_all_rows else pending_rows,
+        approval_rows if show_all_rows else actionable_rows,
         use_container_width=True,
         hide_index=True,
     )
 
-    st.markdown("**Approve or reject a request:**")
-    option_labels = [
-        f"{row['approval_id'][:16]}...  |  {row['request_type']}  |  {row['employee_id']}"
-        for row in pending_rows
-    ]
-    selected_approval = st.selectbox(
-        "Select request",
-        option_labels,
-        key=f"{widget_prefix}_approval_select",
-    )
-    sel_idx = option_labels.index(selected_approval)
-    sel_row = pending_rows[sel_idx]
+    if pending_rows:
+        st.markdown("**Approve or reject a pending request:**")
+        option_labels = [
+            f"{row['approval_id'][:16]}...  |  {row['request_type']}  |  {row['employee_id']}"
+            for row in pending_rows
+        ]
+        selected_approval = st.selectbox(
+            "Select pending request",
+            option_labels,
+            key=f"{widget_prefix}_approval_select",
+        )
+        sel_idx = option_labels.index(selected_approval)
+        sel_row = pending_rows[sel_idx]
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("✅ Approve & Execute", type="primary", use_container_width=True, key=f"{widget_prefix}_approve_btn"):
-            _update_approval_status(sel_row["approval_id"], "Approved", "")
-            ok, msg = _execute_approved_action(sel_row)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("✅ Approve & Execute", type="primary", use_container_width=True, key=f"{widget_prefix}_approve_btn"):
+                _update_approval_status(sel_row["approval_id"], "Approved", "")
+                ok, msg = _execute_approved_action(sel_row)
+                if not ok:
+                    _update_approval_status(sel_row["approval_id"], "Failed", msg)
+                st.session_state.db_admin_message = (
+                    "success" if ok else "error",
+                    f"{'Approved & employee notified' if ok else 'Failed'}: {msg[:200]}",
+                )
+                st.rerun()
+        with col_b:
+            if st.button("❌ Reject", use_container_width=True, key=f"{widget_prefix}_reject_btn"):
+                _update_approval_status(sel_row["approval_id"], "Rejected", "Rejected by admin")
+                _notify_employee_both_ways(sel_row, "", approved=False)
+                st.session_state.db_admin_message = (
+                    "success",
+                    f"Rejected & employee notified: {sel_row['approval_id'][:16]}...",
+                )
+                st.rerun()
+
+    if failed_rows:
+        st.markdown("**Re-approve failed request (duplicate-safe):**")
+        failed_labels = [
+            f"{row['approval_id'][:16]}...  |  {row['request_type']}  |  {row['employee_id']}"
+            for row in failed_rows
+        ]
+        selected_failed = st.selectbox(
+            "Select failed request",
+            failed_labels,
+            key=f"{widget_prefix}_failed_approval_select",
+        )
+        failed_idx = failed_labels.index(selected_failed)
+        failed_row = failed_rows[failed_idx]
+
+        if st.button("🔁 Re-Approve Failed Request", type="primary", use_container_width=True, key=f"{widget_prefix}_retry_failed_btn"):
+            _update_approval_status(failed_row["approval_id"], "Approved", "Re-approved by admin")
+            ok, msg = _execute_approved_action(failed_row)
             if not ok:
-                _update_approval_status(sel_row["approval_id"], "Failed", msg)
+                _update_approval_status(failed_row["approval_id"], "Failed", msg)
             st.session_state.db_admin_message = (
                 "success" if ok else "error",
-                f"{'Approved & employee notified' if ok else 'Failed'}: {msg[:200]}",
-            )
-            st.rerun()
-    with col_b:
-        if st.button("❌ Reject", use_container_width=True, key=f"{widget_prefix}_reject_btn"):
-            _update_approval_status(sel_row["approval_id"], "Rejected", "Rejected by admin")
-            _notify_employee_both_ways(sel_row, "", approved=False)
-            st.session_state.db_admin_message = (
-                "success",
-                f"Rejected & employee notified: {sel_row['approval_id'][:16]}...",
+                f"{'Re-approved & executed' if ok else 'Re-approval failed'}: {msg[:200]}",
             )
             st.rerun()
 
