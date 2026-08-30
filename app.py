@@ -1341,18 +1341,43 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
         )
         return (raw or "").strip().upper()
 
+    def _normalized_ticket_payload(payload: dict) -> dict:
+        """Normalize approved ticket fields so execution doesn't fail on legacy short inputs."""
+        title = str(payload.get("title", "")).strip()
+        description = str(payload.get("description", "")).strip()
+        category = str(payload.get("category", "Other")).strip() or "Other"
+        priority = str(payload.get("priority", "Medium")).strip() or "Medium"
+
+        if len(title) < 5:
+            title = "IT Support Request"
+        if len(description) < 10:
+            if description:
+                description = f"{description} (approved by admin)"
+            else:
+                description = f"{title} (approved by admin)"
+        if len(description) < 10:
+            description = "Admin-approved IT support request."
+
+        return {
+            "title": title[:100],
+            "description": description,
+            "category": category,
+            "priority": priority,
+        }
+
     try:
         if request_type == "TICKET_CREATION":
             from tools.ticket_creation import ticket_creation
             employee_id = _resolved_employee_id(data)
             if not employee_id:
                 return False, "Execution error: employee_id missing in approval payload."
+            normalized = _normalized_ticket_payload(data)
             result_msg = ticket_creation.invoke({
                 "employee_id": employee_id,
-                "title":       data.get("title", "IT Support Request"),
-                "description": data.get("description", ""),
-                "category":    data.get("category", "Other"),
-                "priority":    data.get("priority", "Medium"),
+                "title":       normalized["title"],
+                "description": normalized["description"],
+                "category":    normalized["category"],
+                "priority":    normalized["priority"],
             })
             result_text = str(result_msg)
             if "❌" in result_text:
