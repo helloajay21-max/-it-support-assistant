@@ -1279,18 +1279,38 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
         return False, "Invalid request_data JSON."
 
     result_msg = ""
+    approval_employee_id = (
+        (approval.get("employee_id") or "").strip().upper()
+    )
+    def _resolved_employee_id(payload: dict) -> str:
+        raw = (
+            payload.get("employee_id")
+            or payload.get("emp_id")
+            or payload.get("employeeId")
+            or approval_employee_id
+        )
+        return (raw or "").strip().upper()
+
     try:
         if request_type == "TICKET_CREATION":
             from tools.ticket_creation import ticket_creation
+            employee_id = _resolved_employee_id(data)
+            if not employee_id:
+                return False, "Execution error: employee_id missing in approval payload."
             result_msg = ticket_creation.invoke({
-                "employee_id": data["employee_id"],
+                "employee_id": employee_id,
                 "title":       data.get("title", "IT Support Request"),
                 "description": data.get("description", ""),
                 "category":    data.get("category", "Other"),
                 "priority":    data.get("priority", "Medium"),
             })
-            ticket_match = re.search(r"\bTKT-\d{4}-\d{3,}\b", str(result_msg))
-            if ticket_match and "✅" in str(result_msg):
+            result_text = str(result_msg)
+            if "❌" in result_text:
+                return False, result_text
+            ticket_match = re.search(r"\bTKT-\d{4}-\d{3,}\b", result_text)
+            if not ticket_match:
+                return False, f"{result_text}\n\nExecution error: ticket ID not found in tool response."
+            if ticket_match:
                 resolved_ok, resolved_msg = _mark_ticket_resolved_after_approval(ticket_match.group(0), approval)
                 if not resolved_ok:
                     return False, f"{result_msg}\n\nApproved ticket could not be finalized as resolved: {resolved_msg}"
@@ -1312,8 +1332,11 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
 
         elif request_type == "EMPLOYEE_DELETION":
             from tools.employee_deletion import delete_employee
+            employee_id = _resolved_employee_id(data)
+            if not employee_id:
+                return False, "Execution error: employee_id missing in approval payload."
             result_msg = delete_employee.invoke({
-                "employee_id": data["employee_id"],
+                "employee_id": employee_id,
                 "hard_delete": bool(data.get("hard_delete", False)),
             })
 
@@ -2178,6 +2201,17 @@ def render_approval_callback() -> None:
         if approval.get("result_message"):
             st.markdown("**Result:**")
             st.markdown(approval["result_message"][:500])
+        if approval.get("status") == "Failed":
+            st.warning("This approval failed during execution. You can retry now.")
+            if st.button("🔁 Retry Failed Execution", type="primary", use_container_width=True):
+                _update_approval_status(token, "Approved", "Retrying failed approval execution")
+                ok, msg = _execute_approved_action(approval)
+                if not ok:
+                    _update_approval_status(token, "Failed", msg)
+                    st.error(f"❌ Retry failed: {msg}")
+                else:
+                    st.success("✅ Retry succeeded and employee has been notified.")
+                st.rerun()
         return
 
     import json as _json
