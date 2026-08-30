@@ -1,6 +1,7 @@
 """
 Database initialization script for the AI Operations Assistant.
-Creates the SQLite database and keeps only the core admin and Arti user records.
+Creates the SQLite database and preserves operational employee and ticket data
+across restarts unless an explicit core-user reset is requested.
 """
 
 import sqlite3
@@ -243,6 +244,11 @@ def _ensure_arti_profile(conn):
     )
 
 
+def _should_reset_to_core_users() -> bool:
+    """Return True only when an explicit core-data reset was requested."""
+    return os.environ.get("RESET_TO_CORE_USERS", "false").strip().lower() in {"1", "true", "yes"}
+
+
 def _prune_to_core_users(conn):
     """Delete all rows except the protected admin and Arti profiles."""
     cursor = conn.cursor()
@@ -351,7 +357,7 @@ def _deduplicate_employee_rows(conn):
 
 
 def init_db():
-    """Initialize the SQLite database with schema and the retained core users."""
+    """Initialize the SQLite database while preserving live users and tickets."""
     # Ensure the parent directory exists (critical for Azure /home/data/ path)
     db_dir = os.path.dirname(DB_PATH)
     if db_dir:
@@ -515,7 +521,8 @@ def init_db():
         pass  # Column already exists
 
     _ensure_arti_profile(conn)
-    _prune_to_core_users(conn)
+    if _should_reset_to_core_users():
+        _prune_to_core_users(conn)
     _cleanup_password_reset_tokens(conn)
 
     sample_tickets = []

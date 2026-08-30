@@ -210,6 +210,7 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SQLITE_DB_PATH` | ❌ | `data/tickets.db` | SQLite database file path |
+| `RESET_TO_CORE_USERS` | ❌ | `false` | Set to `true` only when you intentionally want startup to prune the DB back to the protected admin/core seed users |
 | `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | Azure only | `true` | Keeps `/home` persistent for App Service SQLite storage |
 | `LOG_LEVEL` | ❌ | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`) |
 | `ENABLE_FILE_LOG` | ❌ | `false` | Write logs to `logs/` directory |
@@ -218,6 +219,8 @@ Create a `.env` file from `.env.example`. **Never commit `.env` to GitHub.**
 | `APP_BASE_URL` | ❌ | `http://localhost:8501` | Base URL used in email links for approval actions and forgot-password reset (Azure auto-falls back to `https://$WEBSITE_HOSTNAME` when empty/localhost) |
 
 Normal users can correct their own stored profile details from the **Update My Details** screen after login. This is the recommended way to fix an invalid email address so response emails and approval notifications can be delivered correctly.
+
+By default, application startup now preserves all signed-up users and their ticket history. Newly created profiles such as additional employees remain visible in the admin DB view and continue to participate in ticket lookup/reporting across restarts.
 
 ### SMTP Settings (for real VPN email delivery)
 
@@ -295,6 +298,7 @@ Add these **Secrets**:
 The deployment workflow applies the runtime configuration on every push to `main`, including:
 - persistent App Service storage (`WEBSITES_ENABLE_APP_SERVICE_STORAGE=true`)
 - SQLite path (`/home/data/tickets.db`)
+- no automatic user/ticket pruning unless `RESET_TO_CORE_USERS=true` is explicitly set
 - secure admin login via `ADMIN_PASSWORD`
 - SMTP and VPN notification settings
 
