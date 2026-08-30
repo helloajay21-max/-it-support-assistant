@@ -276,6 +276,16 @@ def _cleanup_password_reset_tokens(conn):
     )
 
 
+def _cleanup_login_sessions(conn):
+    """Delete expired or revoked login sessions."""
+    cursor = conn.cursor()
+    now_iso = datetime.now().isoformat()
+    cursor.execute(
+        "DELETE FROM login_sessions WHERE expires_at < ? OR revoked_at IS NOT NULL",
+        (now_iso,),
+    )
+
+
 def _prefer_employee_record(*employee_ids: str, conn=None) -> str:
     """Pick the strongest employee record from a set of duplicate rows."""
     ids = [employee_id for employee_id in employee_ids if employee_id]
@@ -514,6 +524,22 @@ def init_db():
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_password_reset_expires ON password_reset_tokens(expires_at)"
     )
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS login_sessions (
+            token       TEXT PRIMARY KEY,
+            employee_id TEXT NOT NULL,
+            auth_username TEXT,
+            created_at  TEXT NOT NULL,
+            expires_at  TEXT NOT NULL,
+            revoked_at  TEXT
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_login_sessions_employee ON login_sessions(employee_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_login_sessions_expires ON login_sessions(expires_at)"
+    )
     # Migration: add notification_shown to pre-existing DBs that lack the column
     try:
         cursor.execute("ALTER TABLE pending_approvals ADD COLUMN notification_shown INTEGER NOT NULL DEFAULT 0")
@@ -524,6 +550,7 @@ def init_db():
     if _should_reset_to_core_users():
         _prune_to_core_users(conn)
     _cleanup_password_reset_tokens(conn)
+    _cleanup_login_sessions(conn)
 
     sample_tickets = []
 

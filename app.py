@@ -45,6 +45,8 @@ DEFAULT_MANAGER_OPTIONS = [
     "Carol Davis",
 ]
 MANAGER_OTHER_OPTION = "Manager not listed - enter manually"
+AUTH_QUERY_PARAM = "auth_session"
+LOGIN_SESSION_HOURS = 24
 
 # ── Page Configuration ────────────────────────────────────────────────────────
 st.set_page_config(
@@ -145,6 +147,7 @@ def init_session_state():
         "authenticated": False,
         "current_employee_id": None,
         "auth_username": None,
+        "auth_session_token": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -161,6 +164,118 @@ def ensure_db():
         except Exception as e:
             logger.error("DB init error: %s", e)
             st.error(f"⚠️ Database initialization failed: {e}")
+
+
+def _set_query_param(key: str, value: Optional[str]) -> None:
+    """Set or remove one query parameter without disturbing the others."""
+    if value:
+        st.query_params[key] = value
+    elif key in st.query_params:
+        del st.query_params[key]
+
+
+def _clear_navigation_query_params() -> None:
+    """Clear workflow params while preserving auth session when present."""
+    for key in ("approve", "reject", "reset_password"):
+        if key in st.query_params:
+            del st.query_params[key]
+
+
+def _create_login_session(employee_id: str, auth_username: str) -> str:
+    """Persist a login session token so refresh can restore authentication."""
+    token = secrets.token_urlsafe(32)
+    now = datetime.now()
+    expires_at = now + timedelta(hours=LOGIN_SESSION_HOURS)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM login_sessions WHERE employee_id = ? OR expires_at < ? OR revoked_at IS NOT NULL",
+        (employee_id, now.isoformat()),
+    )
+    cursor.execute(
+        """
+        INSERT INTO login_sessions (token, employee_id, auth_username, created_at, expires_at, revoked_at)
+        VALUES (?, ?, ?, ?, ?, NULL)
+        """,
+        (token, employee_id, auth_username, now.isoformat(), expires_at.isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return token
+
+
+def _restore_login_session() -> bool:
+    """Restore login from a persisted auth query param if still valid."""
+    token = (st.query_params.get(AUTH_QUERY_PARAM) or "").strip()
+    if not token or st.session_state.get("authenticated"):
+        return False
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT s.token, s.employee_id, s.auth_username, s.expires_at,
+                   e.status, e.username, e.email
+            FROM login_sessions s
+            JOIN employees e ON e.employee_id = s.employee_id
+            WHERE s.token = ? AND s.revoked_at IS NULL
+            LIMIT 1
+            """,
+            (token,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            _set_query_param(AUTH_QUERY_PARAM, None)
+            return False
+        session_row = dict(row)
+        expires_at = datetime.fromisoformat(session_row["expires_at"])
+        if session_row.get("status") != "Active" or datetime.now() > expires_at:
+            cursor.execute(
+                "UPDATE login_sessions SET revoked_at = ? WHERE token = ?",
+                (datetime.now().isoformat(), token),
+            )
+            conn.commit()
+            conn.close()
+            _set_query_param(AUTH_QUERY_PARAM, None)
+            return False
+        st.session_state.authenticated = True
+        st.session_state.current_employee_id = session_row["employee_id"]
+        st.session_state.auth_username = (
+            session_row.get("auth_username")
+            or session_row.get("username")
+            or session_row.get("email")
+        )
+        st.session_state.auth_session_token = token
+        conn.close()
+        return True
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Failed to restore login session: %s", exc, exc_info=True)
+        return False
+
+
+def _revoke_login_session(token: Optional[str]) -> None:
+    """Revoke a persisted login session token."""
+    token = (token or "").strip()
+    if not token:
+        return
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE login_sessions SET revoked_at = ? WHERE token = ? AND revoked_at IS NULL",
+            (datetime.now().isoformat(), token),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.error("Failed to revoke login session: %s", exc, exc_info=True)
 
 
 def _reset_conversation_state() -> None:
@@ -645,9 +760,13 @@ def _login_user(identifier: str, password: str) -> tuple[bool, str]:
         if not verify_password(password, profile["password_hash"]):
             return False, "Invalid username/email or password."
 
+        auth_username = profile.get("username") or profile["email"]
+        session_token = _create_login_session(profile["employee_id"], auth_username)
         st.session_state.authenticated = True
         st.session_state.current_employee_id = profile["employee_id"]
-        st.session_state.auth_username = profile.get("username") or profile["email"]
+        st.session_state.auth_username = auth_username
+        st.session_state.auth_session_token = session_token
+        _set_query_param(AUTH_QUERY_PARAM, session_token)
         _reset_conversation_state()
         return True, profile["employee_id"]
     except Exception as exc:
@@ -662,10 +781,13 @@ def _login_user(identifier: str, password: str) -> tuple[bool, str]:
 
 def _logout_user() -> None:
     """Clear login state for the current session."""
+    _revoke_login_session(st.session_state.get("auth_session_token"))
+    _set_query_param(AUTH_QUERY_PARAM, None)
     _reset_conversation_state()
     st.session_state.authenticated = False
     st.session_state.current_employee_id = None
     st.session_state.auth_username = None
+    st.session_state.auth_session_token = None
     st.session_state.show_db_admin = False
     st.session_state.db_admin_mode = "view"
     st.session_state.show_profile_editor = False
@@ -2048,7 +2170,7 @@ def render_approval_callback() -> None:
 
     st.divider()
     if st.button(f"🏠 Go to {PROJECT_NAME}", use_container_width=True):
-        st.query_params.clear()
+        _clear_navigation_query_params()
         st.rerun()
 
 
@@ -2065,7 +2187,7 @@ def render_password_reset_page() -> None:
     if not token:
         st.error("❌ Invalid reset link.")
         if st.button("Go to Login", use_container_width=True):
-            st.query_params.clear()
+            _clear_navigation_query_params()
             st.rerun()
         return
 
@@ -2085,7 +2207,7 @@ def render_password_reset_page() -> None:
 
     st.caption("Password must be at least 8 characters and include uppercase, lowercase, and a number.")
     if st.button("Back to Login", use_container_width=True):
-        st.query_params.clear()
+        _clear_navigation_query_params()
         st.rerun()
 
 
@@ -2098,6 +2220,8 @@ def main():
     if "reset_password" in params:
         render_password_reset_page()
         return
+
+    _restore_login_session()
 
     if not st.session_state.get("authenticated"):
         if not st.session_state.get("db_initialized"):
