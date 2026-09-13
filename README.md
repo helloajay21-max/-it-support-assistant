@@ -27,6 +27,15 @@ An **Agentic AI system** where an LLM acts as an intelligent agent that:
 6. **Sends and logs operational emails** (e.g., VPN first-time setup + reset) to the employee-linked email when valid
 7. **Supports secure multi-user access** with admin-only approvals and self-service profile correction for normal users
 
+### ✅ Key Features
+
+- Secure login with username/email/name matching and PBKDF2 password hashing
+- Email-based MFA verification with one-time codes sent to the registered email
+- Forgot-username recovery that emails the username back to the user
+- Password reset flow that works for admins and regular users without stale old credentials reappearing
+- Direct ticket deletion for both the ticket owner and the admin
+- Database admin actions for approval workflow and employee management
+
 ---
 
 ## 🏗️ Architecture

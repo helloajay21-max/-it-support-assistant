@@ -1221,6 +1221,47 @@ def _db_counts() -> tuple[int, int, int, int]:
     return employees_count, tickets_count, email_dispatch_count, approvals_count
 
 
+def _delete_ticket_record(ticket_id: str, *, requested_by_employee_id: Optional[str] = None, is_admin_override: bool = False) -> tuple[bool, str]:
+    """Delete a ticket only when the caller owns it or is the admin."""
+    ticket_id = (ticket_id or "").strip().upper()
+    if not ticket_id:
+        return False, "Please enter a valid ticket ID."
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        if not is_admin_override:
+            if not requested_by_employee_id:
+                conn.close()
+                return False, "Please log in to delete a ticket."
+            cursor.execute(
+                "SELECT employee_id FROM tickets WHERE ticket_id = ? LIMIT 1",
+                (ticket_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return False, f"Ticket {ticket_id} was not found."
+            if row["employee_id"] != (requested_by_employee_id or "").strip().upper():
+                conn.close()
+                return False, "You can only delete your own tickets."
+
+        cursor.execute("DELETE FROM tickets WHERE ticket_id = ?", (ticket_id,))
+        deleted = int(cursor.rowcount)
+        conn.commit()
+        conn.close()
+        if deleted:
+            return True, f"Ticket {ticket_id} was deleted successfully."
+        return False, f"Ticket {ticket_id} was not found."
+    except Exception as exc:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        logger.error("Ticket deletion failed for %s: %s", ticket_id, exc, exc_info=True)
+        return False, f"Ticket deletion failed: {exc}"
+
+
 def _apply_db_row_action(table_name: str, selected_ids: list[str], employee_action: str = "") -> tuple[bool, str]:
     """Apply selected-row action from DB admin panel."""
     if not selected_ids:
@@ -2232,6 +2273,28 @@ def render_sidebar():
             st.rerun()
         if not is_admin:
             st.caption("DB admin actions stay restricted to the admin account. Normal users can edit only their own profile above.")
+
+        st.divider()
+
+        # ── Ticket Deletion ──
+        st.markdown("### 🗑️ Delete Existing Ticket")
+        st.caption("Delete a ticket you own, or delete any ticket as admin.")
+        ticket_delete_id = st.text_input(
+            "Ticket ID",
+            value="",
+            key="user_ticket_delete_id",
+            placeholder="e.g. TKT-2026-001",
+        )
+        if st.button("🗑️ Delete Ticket", use_container_width=True, type="secondary", key="delete_ticket_btn"):
+            ok, msg = _delete_ticket_record(
+                ticket_delete_id,
+                requested_by_employee_id=current_employee_id,
+                is_admin_override=is_admin,
+            )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
         st.divider()
 
