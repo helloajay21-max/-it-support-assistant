@@ -2279,22 +2279,50 @@ def render_sidebar():
         # ── Ticket Deletion ──
         st.markdown("### 🗑️ Delete Existing Ticket")
         st.caption("Delete a ticket you own, or delete any ticket as admin.")
-        ticket_delete_id = st.text_input(
-            "Ticket ID",
-            value="",
-            key="user_ticket_delete_id",
-            placeholder="e.g. TKT-2026-001",
-        )
-        if st.button("🗑️ Delete Ticket", use_container_width=True, type="secondary", key="delete_ticket_btn"):
-            ok, msg = _delete_ticket_record(
-                ticket_delete_id,
-                requested_by_employee_id=current_employee_id,
-                is_admin_override=is_admin,
+        if is_admin:
+            ticket_delete_id = st.text_input(
+                "Ticket ID",
+                value="",
+                key="user_ticket_delete_id",
+                placeholder="e.g. TKT-2026-001",
             )
-            if ok:
-                st.success(msg)
+        else:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT ticket_id, title, status FROM tickets WHERE employee_id = ? ORDER BY created_at DESC",
+                (current_employee_id,),
+            )
+            user_ticket_rows = [dict(row) for row in cursor.fetchall()]
+            conn.close()
+            if user_ticket_rows:
+                ticket_options = [
+                    f"{row['ticket_id']} — {row['title']} ({row['status']})"
+                    for row in user_ticket_rows
+                ]
+                selected_ticket_label = st.selectbox(
+                    "Select one of your tickets",
+                    ticket_options,
+                    index=0,
+                    key="user_ticket_delete_select",
+                )
+                ticket_delete_id = selected_ticket_label.split(" — ", 1)[0]
             else:
-                st.error(msg)
+                st.info("You don't have any tickets to delete yet.")
+                ticket_delete_id = ""
+        if st.button("🗑️ Delete Ticket", use_container_width=True, type="secondary", key="delete_ticket_btn"):
+            if not ticket_delete_id:
+                st.warning("Select a ticket to delete first.")
+            else:
+                ok, msg = _delete_ticket_record(
+                    ticket_delete_id,
+                    requested_by_employee_id=current_employee_id,
+                    is_admin_override=is_admin,
+                )
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
 
         st.divider()
 
