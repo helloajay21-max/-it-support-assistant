@@ -3,6 +3,8 @@ Streamlit UI for the AI Operations Assistant.
 Provides a chat interface with conversation history and tool visibility.
 """
 
+import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -148,6 +150,8 @@ def init_session_state():
         "current_employee_id": None,
         "auth_username": None,
         "auth_session_token": None,
+        "pending_mfa_employee_id": None,
+        "pending_mfa_email": None,
         "force_clear_browser_auth": False,
     }
     for key, value in defaults.items():
@@ -508,6 +512,106 @@ def _build_query_link(query_key: str, token: str) -> str:
     return f"{base}/?{query_key}={token}"
 
 
+def _issue_mfa_challenge(employee_id: str, email: str) -> tuple[bool, str]:
+    """Generate and email a one-time 6-digit code for MFA verification."""
+    employee_id = (employee_id or "").strip()
+    email = (email or "").strip().lower()
+    if not employee_id or not email:
+        return False, "Missing MFA recipient details."
+
+    code = f"{secrets.randbelow(900000) + 100000:06d}"
+    code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    now = datetime.now()
+    expires_at = now + timedelta(minutes=10)
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO mfa_tokens (employee_id, email, code_hash, created_at, expires_at, used_at)
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (employee_id, email, code_hash, now.isoformat(), expires_at.isoformat()),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        return False, "Could not prepare the MFA challenge."
+
+    subject = f"{PROJECT_NAME} — Your Verification Code"
+    body = (
+        f"Hello,\n\nYour secure sign-in code is: {code}\n\n"
+        f"Enter it in the app to complete your login. This code expires in 10 minutes.\n\n"
+        f"---\n{PROJECT_NAME}"
+    )
+
+    from agent.nodes import _send_email
+
+    sent_ok, err = _send_email(email, subject, body)
+    if not sent_ok:
+        cursor.execute("DELETE FROM mfa_tokens WHERE employee_id = ? AND email = ? AND created_at = ?", (employee_id, email, now.isoformat()))
+        conn.commit()
+        conn.close()
+        return False, f"Could not send the verification code: {err}"
+
+    conn.close()
+    return True, f"A 6-digit code was sent to {email}."
+
+
+def _verify_mfa_code(employee_id: str, code: str) -> bool:
+    """Verify a submitted MFA code against the latest active challenge."""
+    employee_id = (employee_id or "").strip()
+    code = (code or "").strip()
+    if not employee_id or len(code) != 6 or not code.isdigit():
+        return False
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, code_hash, expires_at, used_at
+        FROM mfa_tokens
+        WHERE employee_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (employee_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+
+    expires_at = row["expires_at"]
+    try:
+        if datetime.now() > datetime.fromisoformat(expires_at):
+            conn.close()
+            return False
+    except Exception:
+        conn.close()
+        return False
+
+    if row["used_at"]:
+        conn.close()
+        return False
+
+    expected_hash = (row["code_hash"] or "").lower()
+    candidate_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(expected_hash, candidate_hash):
+        conn.close()
+        return False
+
+    cursor.execute(
+        "UPDATE mfa_tokens SET used_at = ? WHERE id = ?",
+        (datetime.now().isoformat(), row["id"]),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
 def _request_password_reset(identifier: str) -> tuple[bool, str]:
     """
     Create and email a one-time password reset link for an existing user.
@@ -515,7 +619,7 @@ def _request_password_reset(identifier: str) -> tuple[bool, str]:
     """
     identifier = (identifier or "").strip().lower()
     if not identifier:
-        return False, "Enter your username or email."
+        return False, "Enter your username, email, or full name."
 
     generic_msg = "If this account exists, a password reset link has been sent to the registered email."
     conn = None
@@ -526,10 +630,13 @@ def _request_password_reset(identifier: str) -> tuple[bool, str]:
             """
             SELECT employee_id, name, email, status
             FROM employees
-            WHERE LOWER(COALESCE(username, '')) = LOWER(?) OR LOWER(email) = LOWER(?)
+            WHERE LOWER(COALESCE(username, '')) = LOWER(?)
+               OR LOWER(email) = LOWER(?)
+               OR LOWER(COALESCE(name, '')) = LOWER(?)
+            ORDER BY is_admin DESC, status DESC, created_at ASC
             LIMIT 1
             """,
-            (identifier, identifier),
+            (identifier, identifier, identifier),
         )
         user_row = cursor.fetchone()
         if not user_row:
@@ -645,6 +752,10 @@ def _reset_password_with_token(token: str, new_password: str) -> tuple[bool, str
         cursor.execute(
             "UPDATE employees SET password_hash = ? WHERE employee_id = ?",
             (hash_password(new_password), token_data["employee_id"]),
+        )
+        cursor.execute(
+            "DELETE FROM login_sessions WHERE employee_id = ?",
+            (token_data["employee_id"],),
         )
         now_text = datetime.now().isoformat()
         cursor.execute(
@@ -777,10 +888,10 @@ def _create_user_account(
 
 
 def _login_user(identifier: str, password: str) -> tuple[bool, str]:
-    """Authenticate a user by username or email."""
+    """Authenticate a user and trigger an email-based MFA challenge."""
     identifier = (identifier or "").strip().lower()
     if not identifier or not password:
-        return False, "Enter both username/email and password."
+        return False, "Enter both username/email/full name and password."
 
     conn = None
     try:
@@ -790,10 +901,13 @@ def _login_user(identifier: str, password: str) -> tuple[bool, str]:
             """
             SELECT employee_id, name, email, username, password_hash, status, is_admin
             FROM employees
-            WHERE LOWER(COALESCE(username, '')) = LOWER(?) OR LOWER(email) = LOWER(?)
+            WHERE LOWER(COALESCE(username, '')) = LOWER(?)
+               OR LOWER(email) = LOWER(?)
+               OR LOWER(COALESCE(name, '')) = LOWER(?)
+            ORDER BY is_admin DESC, status DESC, created_at ASC
             LIMIT 1
             """,
-            (identifier, identifier),
+            (identifier, identifier, identifier),
         )
         row = cursor.fetchone()
         conn.close()
@@ -808,16 +922,17 @@ def _login_user(identifier: str, password: str) -> tuple[bool, str]:
         if not verify_password(password, profile["password_hash"]):
             return False, "Invalid username/email or password."
 
-        auth_username = profile.get("username") or profile["email"]
-        session_token = _create_login_session(profile["employee_id"], auth_username)
-        st.session_state.authenticated = True
-        st.session_state.current_employee_id = profile["employee_id"]
-        st.session_state.auth_username = auth_username
-        st.session_state.auth_session_token = session_token
-        st.session_state.force_clear_browser_auth = False
-        _set_query_param(AUTH_QUERY_PARAM, session_token)
-        _reset_conversation_state()
-        return True, profile["employee_id"]
+        email = (profile.get("email") or "").strip().lower()
+        if not EMAIL_RE.match(email):
+            return False, "This account does not have a valid email for MFA. Contact the admin."
+
+        ok, msg = _issue_mfa_challenge(profile["employee_id"], email)
+        if not ok:
+            return False, msg
+
+        st.session_state.pending_mfa_employee_id = profile["employee_id"]
+        st.session_state.pending_mfa_email = email
+        return True, msg
     except Exception as exc:
         if conn is not None:
             try:
@@ -837,6 +952,8 @@ def _logout_user() -> None:
     st.session_state.current_employee_id = None
     st.session_state.auth_username = None
     st.session_state.auth_session_token = None
+    st.session_state.pending_mfa_employee_id = None
+    st.session_state.pending_mfa_email = None
     st.session_state.force_clear_browser_auth = True
     st.session_state.show_db_admin = False
     st.session_state.db_admin_mode = "view"
@@ -873,16 +990,55 @@ def render_auth_page() -> None:
     login_tab, signup_tab, forgot_tab = st.tabs(["Login", "Sign Up", "Forgot Password"])
 
     with login_tab:
-        with st.form("login_form", clear_on_submit=False):
-            identifier = st.text_input("Username or email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("🔐 Login", type="primary", use_container_width=True)
-        if submitted:
-            ok, msg = _login_user(identifier, password)
-            if ok:
-                st.success("✅ Login successful.")
-                st.rerun()
-            st.error(msg)
+        if st.session_state.get("pending_mfa_employee_id"):
+            st.warning(f"Email verification required for {st.session_state.get('pending_mfa_email') or 'your account'}.")
+            with st.form("mfa_form", clear_on_submit=False):
+                mfa_code = st.text_input("Enter the 6-digit code from your email", max_chars=6)
+                verify_submit = st.form_submit_button("✓ Verify code", type="primary", use_container_width=True)
+                resend_submit = st.form_submit_button("↻ Resend code", use_container_width=True)
+            if verify_submit:
+                employee_id = st.session_state.get("pending_mfa_employee_id")
+                if not employee_id:
+                    st.error("The MFA challenge expired. Please log in again.")
+                elif _verify_mfa_code(employee_id, mfa_code):
+                    profile = _get_employee_profile(employee_id)
+                    auth_username = (profile.get("username") or profile.get("email") or "unknown")
+                    session_token = _create_login_session(employee_id, auth_username)
+                    st.session_state.authenticated = True
+                    st.session_state.current_employee_id = employee_id
+                    st.session_state.auth_username = auth_username
+                    st.session_state.auth_session_token = session_token
+                    st.session_state.pending_mfa_employee_id = None
+                    st.session_state.pending_mfa_email = None
+                    st.session_state.force_clear_browser_auth = False
+                    _set_query_param(AUTH_QUERY_PARAM, session_token)
+                    _reset_conversation_state()
+                    st.success("✅ MFA verified. Login successful.")
+                    st.rerun()
+                else:
+                    st.error("Invalid or expired verification code. Please try again or request a new one.")
+            if resend_submit:
+                profile = _get_employee_profile(st.session_state.get("pending_mfa_employee_id"))
+                email = (profile.get("email") or st.session_state.get("pending_mfa_email") or "").strip().lower()
+                if not email:
+                    st.error("No valid email is associated with this account.")
+                else:
+                    ok, msg = _issue_mfa_challenge(st.session_state.get("pending_mfa_employee_id"), email)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+        else:
+            with st.form("login_form", clear_on_submit=False):
+                identifier = st.text_input("Username, email, or full name")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("🔐 Login", type="primary", use_container_width=True)
+            if submitted:
+                ok, msg = _login_user(identifier, password)
+                if ok:
+                    st.info(msg)
+                else:
+                    st.error(msg)
 
     with signup_tab:
         signup_department_options = _department_select_options()
@@ -921,7 +1077,7 @@ def render_auth_page() -> None:
     with forgot_tab:
         st.caption("Request a one-time password reset link to your registered email address.")
         with st.form("forgot_password_form", clear_on_submit=False):
-            forgot_identifier = st.text_input("Username or email")
+            forgot_identifier = st.text_input("Username, email, or full name")
             forgot_submitted = st.form_submit_button("📨 Send reset link", type="primary", use_container_width=True)
         if forgot_submitted:
             ok, msg = _request_password_reset(forgot_identifier)

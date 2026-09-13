@@ -134,10 +134,11 @@ def _ensure_admin_profile(conn):
             (username_owner["employee_id"],),
         )
 
-    cursor.execute("SELECT created_at FROM employees WHERE employee_id = ?", (ADMIN_EMPLOYEE_ID,))
+    cursor.execute("SELECT created_at, password_hash FROM employees WHERE employee_id = ?", (ADMIN_EMPLOYEE_ID,))
     existing_admin = cursor.fetchone()
     created_at = existing_admin["created_at"] if existing_admin and existing_admin["created_at"] else datetime.now().isoformat()
-    password_hash = hash_password(ADMIN_PASSWORD) if ADMIN_PASSWORD else None
+    existing_password_hash = existing_admin["password_hash"] if existing_admin and existing_admin["password_hash"] else None
+    password_hash = existing_password_hash or (hash_password(ADMIN_PASSWORD) if ADMIN_PASSWORD else None)
 
     cursor.execute(
         """
@@ -160,7 +161,7 @@ def _ensure_admin_profile(conn):
         ),
     )
 
-    if ADMIN_PASSWORD:
+    if ADMIN_PASSWORD and not existing_password_hash:
         cursor.execute(
             """
             UPDATE employees
@@ -282,6 +283,16 @@ def _cleanup_login_sessions(conn):
     now_iso = datetime.now().isoformat()
     cursor.execute(
         "DELETE FROM login_sessions WHERE expires_at < ? OR revoked_at IS NOT NULL",
+        (now_iso,),
+    )
+
+
+def _cleanup_mfa_tokens(conn):
+    """Delete expired or already-used MFA verification codes."""
+    cursor = conn.cursor()
+    now_iso = datetime.now().isoformat()
+    cursor.execute(
+        "DELETE FROM mfa_tokens WHERE expires_at < ? OR used_at IS NOT NULL",
         (now_iso,),
     )
 
@@ -636,6 +647,23 @@ def init_db():
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_login_sessions_expires ON login_sessions(expires_at)"
     )
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS mfa_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id TEXT NOT NULL,
+            email TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            used_at TEXT
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mfa_tokens_employee ON mfa_tokens(employee_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mfa_tokens_expires ON mfa_tokens(expires_at)"
+    )
     # Migration: add notification_shown to pre-existing DBs that lack the column
     try:
         cursor.execute("ALTER TABLE pending_approvals ADD COLUMN notification_shown INTEGER NOT NULL DEFAULT 0")
@@ -648,6 +676,7 @@ def init_db():
     _reconcile_approved_ticket_requests(conn)
     _cleanup_password_reset_tokens(conn)
     _cleanup_login_sessions(conn)
+    _cleanup_mfa_tokens(conn)
 
     sample_tickets = []
 
