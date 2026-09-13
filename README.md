@@ -102,6 +102,107 @@ AgentState {
 
 ---
 
+## 🚀 Local Setup and Git Push Commands
+
+### Windows (PowerShell)
+
+```powershell
+# Clone the repository
+git clone https://github.com/helloajay21-max/-it-support-assistant.git
+cd .\-it-support-assistant
+
+# Create and activate virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# If PowerShell blocks activation, run:
+# Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+# .\.venv\Scripts\Activate.ps1
+
+# Install dependencies
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# Create environment file
+Copy-Item .env.example .env
+notepad .env
+
+# Initialize the database
+python data/init_db.py
+
+# Run the app locally
+streamlit run app.py
+```
+
+Open the app in your browser at: `http://localhost:8501`
+
+Git push commands:
+
+```powershell
+git status
+git add .
+git commit -m "Update project"
+git push origin main
+```
+
+### Linux/macOS
+
+```bash
+# Clone the repository
+git clone https://github.com/helloajay21-max/-it-support-assistant.git
+cd -it-support-assistant
+
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+
+# Create environment file
+cp .env.example .env
+
+# Initialize the database
+python data/init_db.py
+
+# Run the app locally
+streamlit run app.py
+```
+
+Git push commands:
+
+```bash
+git status
+git add .
+git commit -m "Update project"
+git push origin main
+```
+
+### Example `.env` values
+
+```env
+OPENAI_API_KEY=your_openai_key
+# OR
+# AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+# AZURE_OPENAI_API_KEY=your_azure_key
+# AZURE_OPENAI_DEPLOYMENT=gpt-4o
+# AZURE_OPENAI_API_VERSION=2024-02-01
+
+ADMIN_EMAIL=helloajay21@gmail.com
+ADMIN_PASSWORD=YourStrongPassword
+
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your_email@gmail.com
+SMTP_PASSWORD=your_app_password
+SMTP_FROM_EMAIL=your_email@gmail.com
+SMTP_USE_TLS=true
+SMTP_USE_SSL=false
+```
+
+---
+
 ## 📁 Project Structure
 
 ```
