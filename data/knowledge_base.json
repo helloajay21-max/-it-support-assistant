@@ -79,8 +79,8 @@
   {
     "article_id": "KB012",
     "category": "MFA",
-    "title": "Setting Up Multi-Factor Authentication (MFA)",
-    "keywords": ["mfa", "two factor", "2fa", "authenticator", "microsoft authenticator", "security"],
-    "content": "To set up MFA:\n1. Download Microsoft Authenticator on your mobile device\n2. Go to https://aka.ms/mfasetup from your work computer\n3. Sign in with your corporate account\n4. Click 'Add method' and select 'Authenticator app'\n5. Scan the QR code shown on screen with the Microsoft Authenticator app\n6. Enter the 6-digit code to verify setup\n\nAlternative method (Phone call or SMS):\n1. Select 'Phone' as the method\n2. Enter your mobile number\n3. Choose call or text verification\n\nMFA is mandatory for all remote access including VPN, email, and cloud applications."
+    "title": "Email-Based MFA Verification for This App",
+    "keywords": ["mfa", "two factor", "2fa", "email verification", "security", "login code", "otp"],
+    "content": "This app uses email-based MFA instead of the old Microsoft Authenticator setup steps.\n1. Sign in using your username, email, or full name\n2. Enter your password\n3. The system sends a 6-digit verification code to your registered email\n4. Enter that code on the login page to complete sign-in\n5. If you do not receive the code, check your email spam or request a resend\n\nFor password or username recovery:\n- Use the 'Forgot password' link to reset your password\n- Use the 'Forgot username' option to receive your username by email\n\nThis is the recommended and simpler flow for secure access in this application."
   }
 ]

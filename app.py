@@ -612,6 +612,67 @@ def _verify_mfa_code(employee_id: str, code: str) -> bool:
     return True
 
 
+def _recover_username(identifier: str) -> tuple[bool, str]:
+    """Email the stored username to an employee who forgot it."""
+    identifier = (identifier or "").strip().lower()
+    if not identifier:
+        return False, "Enter your email address or full name."
+
+    generic_msg = "If that account exists, your username has been sent to the registered email address."
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT employee_id, name, email, username, status
+            FROM employees
+            WHERE LOWER(email) = LOWER(?)
+               OR LOWER(COALESCE(name, '')) = LOWER(?)
+            ORDER BY is_admin DESC, status DESC, created_at ASC
+            LIMIT 1
+            """,
+            (identifier, identifier),
+        )
+        user_row = cursor.fetchone()
+        if not user_row:
+            conn.close()
+            return True, generic_msg
+
+        user = dict(user_row)
+        email = (user.get("email") or "").strip().lower()
+        username = (user.get("username") or "").strip()
+        if user.get("status") != "Active" or not EMAIL_RE.match(email) or not username:
+            conn.close()
+            return True, generic_msg
+
+        subject = f"{PROJECT_NAME} — Your Login Username"
+        body = (
+            f"Hello {user.get('name') or 'User'},\n\n"
+            f"Your username for {PROJECT_NAME} is: {username}\n\n"
+            "Use this username on the login page, along with your password.\n\n"
+            f"---\n{PROJECT_NAME}"
+        )
+
+        from agent.nodes import _send_email
+
+        sent_ok, err = _send_email(email, subject, body)
+        if not sent_ok:
+            conn.close()
+            return False, f"Could not send your username right now: {err}"
+
+        conn.close()
+        return True, generic_msg
+    except Exception as exc:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.error("Username recovery failed: %s", exc, exc_info=True)
+        return False, "Could not recover your username right now."
+
+
 def _request_password_reset(identifier: str) -> tuple[bool, str]:
     """
     Create and email a one-time password reset link for an existing user.
@@ -1037,6 +1098,17 @@ def render_auth_page() -> None:
                 ok, msg = _login_user(identifier, password)
                 if ok:
                     st.info(msg)
+                else:
+                    st.error(msg)
+
+            st.markdown("<div style='height: 0.5rem;'></div>", unsafe_allow_html=True)
+            with st.form("forgot_username_form", clear_on_submit=False):
+                username_lookup = st.text_input("Forgot username? Enter your email or full name", key="forgot_username_input")
+                username_lookup_submit = st.form_submit_button("📨 Email me my username", use_container_width=True)
+            if username_lookup_submit:
+                ok, msg = _recover_username(username_lookup)
+                if ok:
+                    st.success(msg)
                 else:
                     st.error(msg)
 
@@ -2213,8 +2285,11 @@ def render_sidebar():
             ("🔑 How to reset VPN password",
              "How do I reset my VPN password? Give me step-by-step instructions.",
              None),
-            ("📱 How to set up MFA",
-             "How do I set up MFA on my phone? Give me step-by-step guide.",
+            ("📧 Email MFA verification",
+             "How does the app's email-based MFA work? Show me the login verification flow.",
+             None),
+            ("👤 Forgot my username",
+             "I forgot my username for login. Tell me how to recover it.",
              None),
             # Ticket lookup — includes EMP ID, goes direct
             (f"🎫 My tickets ({current_employee_id})",
