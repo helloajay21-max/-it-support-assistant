@@ -24,6 +24,8 @@ from tools.ticket_lookup import ticket_lookup
 from tools.employee_registration import create_employee
 from tools.employee_deletion import delete_employee
 from data.init_db import get_db_connection
+from utils import metrics
+from utils.guardrails import check_grounding, check_input
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -1392,8 +1394,21 @@ def response_node(state: AgentState) -> dict:
     if not state.tool_output:
         messages = [SystemMessage(content=SYSTEM_PROMPT)] + list(state.messages[-10:])
         try:
-            ai_response = get_llm().invoke(messages)
-            return {"messages": [AIMessage(content=ai_response.content)], "tool_output": None}
+            guard_text = next((m.content for m in reversed(state.messages) if isinstance(m, HumanMessage)), "")
+            guard = check_input(guard_text)
+            if not guard.allowed:
+                return {"messages": [AIMessage(content=guard.message)], "tool_output": None}
+            with metrics.timed("llm.general.latency"):
+                ai_response = get_llm().invoke(messages)
+            history = " ".join(str(m.content) for m in state.messages[-10:])
+            grounded, bad = check_grounding(ai_response.content, SYSTEM_PROMPT, history)
+            content = ai_response.content
+            if not grounded:
+                content += (
+                    "\n\n?? *Some details above (" + ", ".join(bad[:3]) + ") could not be verified. "
+                    "Please confirm with the IT helpdesk at helpdesk@techcorp.com / ext. 4357.*"
+                )
+            return {"messages": [AIMessage(content=content)], "tool_output": None}
         except Exception as e:
             logger.error("LLM response error: %s", e)
             return {"messages": [AIMessage(content="I'm sorry, I encountered an error processing your request. Please try again.")], "tool_output": None}
@@ -1428,6 +1443,10 @@ Instructions:
             HumanMessage(content=response_prompt)
         ])
         final_response = ai_response.content
+        grounded, bad = check_grounding(final_response, tool_output, SYSTEM_PROMPT, last_human_message)
+        if not grounded:
+            logger.warning("Ungrounded LLM response replaced by tool output: %s", bad)
+            final_response = tool_output
     except Exception as e:
         logger.error("Response generation error: %s", e)
         final_response = tool_output  # Fall back to raw tool output

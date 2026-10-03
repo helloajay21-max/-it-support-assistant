@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from data.init_db import get_db_connection, init_db
 from utils.auth import hash_password, validate_username, verify_password
+from utils import metrics
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -2275,6 +2276,16 @@ def render_sidebar():
             st.caption("DB admin actions stay restricted to the admin account. Normal users can edit only their own profile above.")
 
         st.divider()
+
+        if is_admin:
+            with st.expander("📈 Monitoring & Guardrails", expanded=False):
+                snap = metrics.snapshot()
+                if snap["counters"] or snap["latencies"]:
+                    st.json(snap)
+                else:
+                    st.caption("No activity recorded yet.")
+                if st.button("Refresh metrics", key="refresh_metrics"):
+                    st.rerun()
 
         # ── Ticket Deletion ──
         st.markdown("### 🗑️ Delete Existing Ticket")
