@@ -845,6 +845,30 @@ def _reset_password_with_token(token: str, new_password: str) -> tuple[bool, str
         return False, "Could not reset password right now. Please request a new reset email."
 
 
+def _employee_status(employee_id: str) -> str:
+    try:
+        conn = get_db_connection()
+        row = conn.execute("SELECT status FROM employees WHERE employee_id = ?", (employee_id,)).fetchone()
+        conn.close()
+        return row["status"] if row else ""
+    except Exception:
+        return ""
+
+
+def _remove_pending_signup(employee_id: str) -> None:
+    """Delete a never-approved sign-up row (used on rejection or submission failure)."""
+    try:
+        conn = get_db_connection()
+        conn.execute(
+            "DELETE FROM employees WHERE employee_id = ? AND status = 'Pending' AND is_admin = 0",
+            (employee_id,),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.error("Could not remove pending signup %s: %s", employee_id, exc)
+
+
 def _create_user_account(
     name: str,
     email: str,
@@ -898,12 +922,17 @@ def _create_user_account(
                 return False, "This admin account cannot be changed through sign up."
             if existing_employee.get("password_hash"):
                 conn.close()
+                if existing_employee.get("status") == "Pending":
+                    return False, "Your sign-up is already awaiting admin approval."
                 return False, "An account already exists for this email. Please log in."
 
+            # Records already vetted (registered by an admin) activate directly;
+            # anything else must wait for admin approval.
+            new_status = "Active" if existing_employee.get("status") == "Active" else "Pending"
             cursor.execute(
                 """
                 UPDATE employees
-                SET name = ?, department = ?, manager_name = ?, username = ?, password_hash = ?, role = COALESCE(NULLIF(role, ''), 'Employee'), status = 'Active', is_admin = 0
+                SET name = ?, department = ?, manager_name = ?, username = ?, password_hash = ?, role = COALESCE(NULLIF(role, ''), 'Employee'), status = ?, is_admin = 0
                 WHERE employee_id = ?
                 """,
                 (
@@ -912,6 +941,7 @@ def _create_user_account(
                     manager_name,
                     username,
                     password_hash,
+                    new_status,
                     existing_employee["employee_id"],
                 ),
             )
@@ -922,7 +952,7 @@ def _create_user_account(
                 """
                 INSERT INTO employees
                 (employee_id, name, email, department, role, manager_name, status, created_at, username, password_hash, is_admin)
-                VALUES (?, ?, ?, ?, 'Employee', ?, 'Active', ?, ?, ?, 0)
+                VALUES (?, ?, ?, ?, 'Employee', ?, 'Pending', ?, ?, ?, 0)
                 """,
                 (
                     employee_id,
@@ -938,6 +968,26 @@ def _create_user_account(
 
         conn.commit()
         conn.close()
+        conn = None
+
+        if _employee_status(employee_id) == "Pending":
+            from agent.nodes import _create_pending_approval
+            ok, approval_msg = _create_pending_approval(
+                "ACCOUNT_SIGNUP",
+                employee_id,
+                email,
+                name,
+                {"employee_id": employee_id, "name": name, "email": email,
+                 "department": department, "manager_name": manager_name, "username": username},
+                f"Self sign-up\nEmployee ID: {employee_id}\nName: {name}\nEmail: {email}\n"
+                f"Department: {department}\nManager: {manager_name}\nUsername: {username}",
+            )
+            logger.info("Signup %s submitted for approval (ok=%s)", employee_id, ok)
+            if not ok:
+                _remove_pending_signup(employee_id)
+                return False, "Could not submit your sign-up for approval. Please try again."
+        else:
+            logger.info("Signup %s activated directly (pre-registered record)", employee_id)
         return True, employee_id
     except Exception as exc:
         if conn is not None:
@@ -977,6 +1027,8 @@ def _login_user(identifier: str, password: str) -> tuple[bool, str]:
             return False, "Invalid username/email or password."
 
         profile = dict(row)
+        if profile.get("status") == "Pending":
+            return False, "Your account is awaiting admin approval. You will be notified by email once approved."
         if profile.get("status") != "Active":
             return False, "This account is inactive. Please contact the admin."
         if not profile.get("password_hash"):
@@ -1142,7 +1194,12 @@ def render_auth_page() -> None:
                 st.error("Passwords do not match.")
             else:
                 ok, msg = _create_user_account(name, email, department, manager_name, username, password)
-                if ok:
+                if ok and _employee_status(msg) == "Pending":
+                    st.success(
+                        f"✅ Sign-up submitted. Your Employee ID is {msg}. "
+                        "An admin must approve your account before you can log in; you'll be notified by email."
+                    )
+                elif ok:
                     st.success(f"✅ Account created successfully. Your Employee ID is {msg}. You can now log in.")
                 else:
                     st.error(msg)
@@ -1750,6 +1807,26 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
                 "role":         data.get("role", "Employee"),
             })
 
+        elif request_type == "ACCOUNT_SIGNUP":
+            employee_id = _resolved_employee_id(data)
+            if not employee_id:
+                return False, "Execution error: employee_id missing in approval payload."
+            conn = get_db_connection()
+            cur = conn.execute(
+                "UPDATE employees SET status = 'Active' WHERE employee_id = ? AND status = 'Pending' AND is_admin = 0",
+                (employee_id,),
+            )
+            conn.commit()
+            changed = cur.rowcount
+            conn.close()
+            if not changed and _employee_status(employee_id) != "Active":
+                return False, f"No pending sign-up found for {employee_id}."
+            logger.info("Sign-up approved: %s", employee_id)
+            result_msg = (
+                f"✅ Your account **{employee_id}** has been approved. "
+                f"You can now log in with your username and password."
+            )
+
         elif request_type == "EMPLOYEE_DELETION":
             from tools.employee_deletion import delete_employee
             employee_id = _resolved_employee_id(data)
@@ -1995,6 +2072,8 @@ def _render_pending_approval_actions(widget_prefix: str, show_all_rows: bool = T
             if st.button("❌ Reject", use_container_width=True, key=f"{widget_prefix}_reject_btn"):
                 _update_approval_status(sel_row["approval_id"], "Rejected", "Rejected by admin")
                 _notify_employee_both_ways(sel_row, "", approved=False)
+                if sel_row.get("request_type") == "ACCOUNT_SIGNUP":
+                    _remove_pending_signup(sel_row.get("employee_id", ""))
                 st.session_state.db_admin_message = (
                     "success",
                     f"Rejected & employee notified: {sel_row['approval_id'][:16]}...",
@@ -2756,6 +2835,8 @@ def render_approval_callback() -> None:
             return ok, msg
         _update_approval_status(token, "Rejected", "Rejected by admin via email link")
         _notify_employee_both_ways(approval, "", approved=False)
+        if approval.get("request_type") == "ACCOUNT_SIGNUP":
+            _remove_pending_signup(approval.get("employee_id", ""))
         return True, "Rejected by admin"
 
     if auto_execute:

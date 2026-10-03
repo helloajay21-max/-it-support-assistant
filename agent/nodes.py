@@ -106,6 +106,21 @@ def _employee_profile(employee_id: str) -> dict:
         return {}
 
 
+def _is_admin_employee(employee_id: str) -> bool:
+    """True when the employee is the protected admin account."""
+    if not employee_id:
+        return False
+    try:
+        conn = get_db_connection()
+        row = conn.execute(
+            "SELECT is_admin FROM employees WHERE employee_id = ? AND status = 'Active'", (employee_id,)
+        ).fetchone()
+        conn.close()
+        return bool(row and row["is_admin"])
+    except Exception:
+        return False
+
+
 def _is_recent_employee(profile: dict, days: int = 7) -> bool:
     """Return True if employee profile was created recently."""
     if not profile or not profile.get("created_at"):
@@ -1660,6 +1675,23 @@ def employee_registration_node(state: AgentState) -> dict:
     }
     summary = "\n".join(f"{k.replace('_',' ').title()}: {v}" for k, v in request_data.items())
 
+    # Admins can register directly; everyone else goes through admin approval.
+    if _is_admin_employee(state.employee_id):
+        try:
+            direct_result = create_employee.invoke(request_data)
+        except Exception as exc:
+            logger.error("Admin direct registration error: %s", exc)
+            direct_result = "❌ Failed to register employee due to a system error."
+        direct_ok = "❌" not in direct_result
+        metrics.incr("employee.registration.direct" if direct_ok else "employee.registration.failed")
+        metrics.log_event("employee_registration", mode="admin_direct", actor=state.employee_id, ok=direct_ok)
+        return {
+            "tool_output": direct_result,
+            "pending_employee": None,
+            "awaiting_info": False,
+            "awaiting_field": None,
+        }
+
     ok, approval_msg = _create_pending_approval(
         "EMPLOYEE_REGISTRATION",
         "NEW",
@@ -1680,7 +1712,8 @@ def employee_registration_node(state: AgentState) -> dict:
             f"  🏢 **Department** : {request_data['department']}\n"
             f"  👔 **Manager**    : {request_data['manager_name']}\n"
             f"  💼 **Role**       : {request_data['role']}\n\n"
-            f"📧 The IT Admin will receive an approval email. Once approved, "
+            f"⏳ **Status: pending approval — this employee is NOT in the database yet.**\n"
+            f"The IT Admin will receive an approval email. Once approved, "
             f"the employee will be registered and notified at **{request_data['email']}**."
             f"{email_note}"
         )
