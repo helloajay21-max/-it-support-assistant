@@ -162,6 +162,59 @@ LLMs can invent URLs, article IDs or phone extensions. `check_grounding()` compa
 
 ---
 
+## 🧪 For Reviewers: Validate Without Azure, API Keys or Login
+
+You do **not** need the author's Azure deployment, an OpenAI key, SMTP or a login. Everything below runs offline in about a minute on any machine with Python 3.11.
+
+```bash
+git clone https://github.com/helloajay21-max/-it-support-assistant.git
+cd -it-support-assistant
+python -m venv .venv && source .venv/bin/activate      # Windows: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### Option 1 - Automated tests (pass/fail proof)
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+23 tests run against a throwaway database and send no email. Expected result: `Ran 23 tests ... OK`.
+
+| Feature | What the tests prove |
+|---------|----------------------|
+| Hybrid search | Exact, synonym (`wifi slow`, `my pc wont start`) and typo (`passwrd reset`) queries find the right article; nonsense returns no results; all 3 retrievers contribute |
+| Fusion (RRF) | The score equals `sum(weight / (60 + rank))`; agreement between retrievers beats a single high rank; results are sorted by fused score |
+| Citations | Every answer has a Sources block, and every cited article ID exists in `data/knowledge_base.json` |
+| Guardrails | Prompt-injection is refused, normal text is allowed, long or control-character input is cleaned, PII is masked |
+| Hallucination check | A reply using only facts from the context passes; invented URLs, emails and IDs are flagged |
+| Logging and monitoring | Each search emits a JSON log line with `request_id` and per-retriever `ranks`; counters and latency (avg, p50, p95, max) update |
+| Sign-up and registration | Sign-up is Pending until admin approval, cannot log in meanwhile, is activated on approval and removed on rejection; a new employee gets a username and a one-time password-setup link |
+
+### Option 2 - Demo script (see the behaviour)
+
+```bash
+python scripts/demo_features.py
+```
+
+Prints, for real queries: the three retrievers' ranks and the fused score (with a hand check of the RRF formula), a full answer with its Sources block, guardrail refusals, the hallucination check on a good and a bad reply, and the monitoring counters and latency. Add `LOG_LEVEL=INFO` to also see the raw JSON log line for each search.
+
+### Option 3 - Run the real app locally (optional)
+
+```bash
+cp .env.example .env     # set OPENAI_API_KEY (or Azure OpenAI), ADMIN_EMAIL, ADMIN_PASSWORD, SMTP_*
+python data/init_db.py
+streamlit run app.py     # http://localhost:8501
+```
+
+Login uses an **emailed one-time code**, so the reviewer needs their own SMTP account (for example a Gmail app password) for this option. With it, follow the "Quick test checklist" above; the admin sidebar **📈 Monitoring & Guardrails** panel shows the counters. Docker works too: `docker compose up --build`.
+
+### What the author's Azure deployment adds
+
+Nothing different in behaviour: the same code, packaged as a container and deployed through GitHub Actions. The pipeline run history in this repository's **Actions** tab is the evidence of deployment.
+
+---
+
 ## 🏗️ Architecture
 
 ```
