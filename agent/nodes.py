@@ -106,6 +106,16 @@ def _employee_profile(employee_id: str) -> dict:
         return {}
 
 
+def _employee_id_by_email(email: str) -> str:
+    try:
+        conn = get_db_connection()
+        row = conn.execute("SELECT employee_id FROM employees WHERE LOWER(email) = LOWER(?)", (email,)).fetchone()
+        conn.close()
+        return row["employee_id"] if row else ""
+    except Exception:
+        return ""
+
+
 def _is_admin_employee(employee_id: str) -> bool:
     """True when the employee is the protected admin account."""
     if not employee_id:
@@ -1683,6 +1693,11 @@ def employee_registration_node(state: AgentState) -> dict:
             logger.error("Admin direct registration error: %s", exc)
             direct_result = "❌ Failed to register employee due to a system error."
         direct_ok = "❌" not in direct_result
+        if direct_ok:
+            from utils.onboarding import describe_provisioning, provision_login
+            new_emp = _employee_id_by_email(request_data["email"])
+            if new_emp:
+                direct_result += "\n\n" + describe_provisioning(provision_login(new_emp))
         metrics.incr("employee.registration.direct" if direct_ok else "employee.registration.failed")
         metrics.log_event("employee_registration", mode="admin_direct", actor=state.employee_id, ok=direct_ok)
         return {
@@ -1692,11 +1707,16 @@ def employee_registration_node(state: AgentState) -> dict:
             "awaiting_field": None,
         }
 
+    # The approval belongs to the requester, so the approve/reject notification reaches them.
+    requester = _employee_profile(state.employee_id) if state.employee_id else {}
+    request_data["requested_by"] = state.employee_id or ""
+    summary += f"\nRequested By: {requester.get('name', 'Unknown')} ({state.employee_id or 'n/a'})"
+
     ok, approval_msg = _create_pending_approval(
         "EMPLOYEE_REGISTRATION",
-        "NEW",
-        pending.get("email", ""),
-        pending.get("name", "New Employee"),
+        state.employee_id or "NEW",
+        requester.get("email") or pending.get("email", ""),
+        requester.get("name") or pending.get("name", "New Employee"),
         request_data,
         summary,
     )
@@ -1714,7 +1734,8 @@ def employee_registration_node(state: AgentState) -> dict:
             f"  💼 **Role**       : {request_data['role']}\n\n"
             f"⏳ **Status: pending approval — this employee is NOT in the database yet.**\n"
             f"The IT Admin will receive an approval email. Once approved, "
-            f"the employee will be registered and notified at **{request_data['email']}**."
+            f"the employee will be registered, receive a username and a password-setup link at "
+            f"**{request_data['email']}**, and you will be notified of the outcome."
             f"{email_note}"
         )
     else:

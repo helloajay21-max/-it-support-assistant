@@ -39,6 +39,7 @@ An **Agentic AI system** where an LLM acts as an intelligent agent that:
 - Guardrails (prompt-injection blocking, input limits, PII-safe logs) and a hallucination/grounding check on LLM replies
 - Structured JSON logging and an admin monitoring panel (counters and latency percentiles)
 - Admin approval for self sign-up and for employee registration requested by non-admins
+- Automatic username assignment and one-time password-setup email for newly registered employees; requester notified of the outcome
 
 ---
 
@@ -148,8 +149,16 @@ LLMs can invent URLs, article IDs or phone extensions. `check_grounding()` compa
 | Path | Who | Result |
 |------|-----|--------|
 | Login page **Sign Up** | New user | Account is created as **Pending** and an approval request goes to the admin. The user cannot log in until the admin approves; a rejection removes the pending account. An email already registered and active by an admin activates immediately. |
-| Chat: *"register new employee"* | Admin | Employee is written to the database immediately |
-| Chat: *"register new employee"* | Any other user | Creates an approval request. The message states the employee is **not in the database yet** until the admin approves. |
+| Chat: *"register new employee"* | Admin | Employee is written to the database immediately; username assigned and password-setup email sent |
+| Chat: *"register new employee"* | Any other user | Creates an approval request owned by the requester. The message states the employee is **not in the database yet** until the admin approves. |
+
+**Username and password for a newly registered employee**
+
+1. When the employee record is created (by admin directly, or on admin approval), `utils/onboarding.py` assigns a **username** from the email (for example `jane.smith@techcorp.com` -> `jane.smith`, made unique with a number if taken).
+2. No password is generated or shown anywhere. The employee receives an email with their Employee ID, username and a **one-time password-setup link valid for 24 hours**.
+3. They open the link, choose a password, then log in with username (or email) + password + email MFA code. If the link expires, **Forgot Password** on the login page issues a new one.
+4. **The requester is notified** of the outcome (approved with the new Employee ID and username, or rejected) by email and by an in-app message at their next visit. Admin sees the requester's name in the approval email.
+5. If the setup email cannot be sent (for example SMTP not configured), the admin result and the requester notification say so, and the employee can use Forgot Password.
 
 ---
 
@@ -174,6 +183,7 @@ LLMs can invent URLs, article IDs or phone extensions. `check_grounding()` compa
 │              └───────────────────────┴───────────────────┘          │
 │                                      │                              │
 │                              [Response Node]                        │
+│                       (grounding / hallucination check)             │
 │                                      │                              │
 │                                     END                             │
 └──────────────────────────────────────────────────────────────────────┘
@@ -181,6 +191,47 @@ LLMs can invent URLs, article IDs or phone extensions. `check_grounding()` compa
          ▼                    ▼                    ▼
   knowledge_base.json    tickets.db          employees.json
   (12 KB articles)    (SQLite tickets)     (Admin + Arti seed users)
+```
+
+### Knowledge Search Pipeline (inside the Knowledge Search node)
+
+```
+ User query
+     │
+     ▼
+ Guardrails (utils/guardrails.py) ── injection / length / control chars ──► blocked + counted
+     │ allowed
+     ▼
+ ┌───────────── Hybrid retrieval (tools/knowledge_search.py) ─────────────┐
+ │  BM25 (lexical)   Field match (keywords/title/category)   Semantic     │
+ │        │                       │                     (n-gram + synonyms)│
+ │        └──────────── 3 ranked lists ────────────────────┘              │
+ └──────────────────────────────┬─────────────────────────────────────────┘
+                                ▼
+                    Reciprocal Rank Fusion (RRF)
+                                ▼
+              Top-K articles + confidence + Sources (citations)
+                                ▼
+ Response node ──► grounding check ──► user
+     │
+     └──► utils/metrics.py: JSON log events, counters, latency ──► Admin "Monitoring & Guardrails" panel
+```
+
+### Registration & Sign-up Approval Flow
+
+```
+ Login page "Sign Up" ──► employee (Pending) ──► approval request ──► Admin approves
+                                                                       ├─ Active: user can log in
+                                                                       └─ Rejected: pending row removed
+
+ Chat "register new employee"
+   ├─ Admin ─────────────► employee created ─┐
+   └─ Other user ► approval request ► Admin approves ─► employee created ─┤
+                                                                           ▼
+                      utils/onboarding.py: assign username + email one-time password-setup link (24h)
+                                                                           ▼
+                      New employee sets own password ─► logs in (email MFA)
+                      Requester is notified (email + in-app) of the outcome
 ```
 
 ### LangGraph State
@@ -194,6 +245,7 @@ AgentState {
   awaiting_field    ← which field we are waiting for
   tool_output       ← raw tool result
   turn_count        ← session turn counter
+  pending_employee / pending_delete / pending_triage ← multi-turn flow data
 }
 ```
 
@@ -203,6 +255,8 @@ AgentState {
 
 | Layer | Technology |
 |-------|-----------|
+| Retrieval | Hybrid BM25 + field + n-gram semantic search with Reciprocal Rank Fusion (pure Python, no extra dependencies) |
+| Safety & Observability | Guardrails, grounding check, JSON logging, in-process metrics |
 | Agent Orchestration | LangGraph ≥ 1.0 |
 | LLM Framework | LangChain ≥ 1.0 |
 | Language Model | Azure OpenAI GPT-4o **or** OpenAI GPT-4o-mini |
@@ -345,7 +399,11 @@ it-support-assistant/
 │   └── tickets.db                    ← SQLite database (auto-created; includes email_dispatch_log)
 │
 ├── utils/
-│   └── logger.py                     ← Centralised logging
+│   ├── logger.py                     ← Centralised logging
+│   ├── metrics.py                    ← Counters, latency stats, structured JSON events
+│   ├── guardrails.py                 ← Injection/input checks, PII redaction, hallucination (grounding) check
+│   ├── onboarding.py                 ← Username assignment + password-setup email for new employees
+│   └── auth.py                       ← Password hashing / username validation
 │
 ├── .streamlit/
 │   └── config.toml                   ← Streamlit theme + server settings

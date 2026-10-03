@@ -1799,6 +1799,7 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
 
         elif request_type == "EMPLOYEE_REGISTRATION":
             from tools.employee_registration import create_employee
+            from utils.onboarding import describe_provisioning, provision_login
             result_msg = create_employee.invoke({
                 "name":         data.get("name", ""),
                 "email":        data.get("email", ""),
@@ -1806,6 +1807,15 @@ def _execute_approved_action(approval: dict) -> tuple[bool, str]:
                 "manager_name": data.get("manager_name", "N/A"),
                 "role":         data.get("role", "Employee"),
             })
+            if "?" in result_msg:
+                return False, result_msg
+            conn = get_db_connection()
+            row = conn.execute(
+                "SELECT employee_id FROM employees WHERE LOWER(email) = LOWER(?)", (data.get("email", ""),)
+            ).fetchone()
+            conn.close()
+            if row:
+                result_msg += "\n\n" + describe_provisioning(provision_login(row["employee_id"]))
 
         elif request_type == "ACCOUNT_SIGNUP":
             employee_id = _resolved_employee_id(data)
